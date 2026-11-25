@@ -77,7 +77,8 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
     @app.get("/api/config")
     async def config():
         return {"shop_name": settings.shop_name, "sales_enabled": settings.sales_enabled,
-                "support": settings.support_text, "terms": settings.terms_text}
+                "support": settings.support_text, "terms": settings.terms_text,
+                "bot_username": settings.bot_username, "contact_url": settings.contact_url}
 
     @app.get("/api/products")
     async def list_products():
@@ -113,6 +114,10 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
         return {"ok": True}
 
     @app.get("/")
+    async def site():
+        return FileResponse(WEBAPP_DIR / "site.html", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/app")
     async def index():
         return FileResponse(WEBAPP_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 

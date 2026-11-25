@@ -235,7 +235,7 @@ def test_subscription_payment_without_expiry_goes_to_operator(client, store):
 def test_commands(client, api):
     hook(client, text("/start"))
     start = api.of("sendMessage")[-1]
-    assert start["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"] == "https://shop.example.com"
+    assert start["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"] == "https://shop.example.com/app"
     hook(client, text("/paysupport", update_id=4))
     assert api.of("sendMessage")[-1]["text"] == "destek@example.com"
     hook(client, text("/terms", update_id=5))
@@ -247,3 +247,10 @@ def test_orders_command_resends_active_content(client, api):
     hook(client, paid(order_id))
     hook(client, text("/orders", update_id=30))
     assert sum("guide.pdf" in p["text"] for p in api.of("sendMessage")) == 2
+
+
+def test_marketing_site_and_app_are_served(client):
+    assert "Stars" in client.get("/").text
+    assert "telegram-web-app.js" in client.get("/app").text
+    cfg = client.get("/api/config").json()
+    assert {"bot_username", "contact_url"} <= set(cfg) and "bot_token" not in cfg

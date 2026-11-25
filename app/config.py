@@ -86,6 +86,8 @@ class Settings:
     support_text: str
     terms_text: str
     shop_name: str = "Stars Mağaza"
+    bot_username: str = ""
+    contact_url: str = ""               # where the marketing site's "talk to us" buttons go
     sales_enabled: bool = False
     db_path: str = "data/shop.sqlite3"
     products_path: str = "products.json"
@@ -105,6 +107,8 @@ class Settings:
             support_text=os.getenv("SUPPORT_TEXT", ""),
             terms_text=os.getenv("TERMS_TEXT", ""),
             shop_name=os.getenv("SHOP_NAME", "Stars Mağaza"),
+            bot_username=os.getenv("BOT_USERNAME", "").lstrip("@"),
+            contact_url=os.getenv("CONTACT_URL", ""),
             sales_enabled=_bool(os.getenv("SALES_ENABLED")),
             db_path=os.getenv("DB_PATH", "data/shop.sqlite3"),
             products_path=os.getenv("PRODUCTS_PATH", "products.json"),
@@ -120,5 +124,7 @@ class Settings:
             raise ConfigError("WEBHOOK_SECRET en az 32 karakter olmalı (A-Z, a-z, 0-9, _ ve -)")
         if not self.webapp_url.startswith("https://"):
             raise ConfigError("WEBAPP_URL https:// ile başlamalı (Telegram Mini App şartı)")
+        if self.contact_url and not self.contact_url.startswith("https://"):
+            raise ConfigError("CONTACT_URL https:// ile başlamalı (ör. https://t.me/kullaniciadi)")
         if self.sales_enabled and (not self.support_text or not self.terms_text):
             raise ConfigError("Satış açıkken SUPPORT_TEXT ve TERMS_TEXT zorunlu (/paysupport ve /terms)")

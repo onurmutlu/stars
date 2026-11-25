@@ -34,7 +34,7 @@ async def setup(settings: Settings) -> None:
                   secret_token=settings.webhook_secret,
                   allowed_updates=["message", "pre_checkout_query"], drop_pending_updates=False)
         await api("setChatMenuButton", menu_button={
-            "type": "web_app", "text": "Mağaza", "web_app": {"url": settings.webapp_url}})
+            "type": "web_app", "text": "Mağaza", "web_app": {"url": settings.webapp_url + "/app"}})
         await api("setMyCommands", commands=COMMANDS)
         print(f"@{me['username']} hazır: webhook, menü butonu ve komutlar ayarlandı.")
     finally:

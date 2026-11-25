@@ -238,7 +238,7 @@ class StarsShop:
             await self.api(
                 "sendMessage", chat_id=user,
                 text=f"{self.settings.shop_name}\nAlışveriş için mağazayı aç. Destek: /paysupport · Koşullar: /terms · Siparişlerim: /orders",
-                reply_markup={"inline_keyboard": [[{"text": "🛍 Mağazayı aç", "web_app": {"url": self.settings.webapp_url}}]]},
+                reply_markup={"inline_keyboard": [[{"text": "🛍 Mağazayı aç", "web_app": {"url": self.settings.webapp_url + "/app"}}]]},
             )
             return
         await self.api("sendMessage", chat_id=user, text=reply)
