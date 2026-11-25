@@ -60,6 +60,8 @@
     .cta { display: flex; flex-wrap: wrap; gap: 12px; }
     .fine { margin-top: 16px; font-size: 14px; color: var(--soft); }
 
+    [data-checkout][hidden] { display: none; }
+
     /* invoice mock */
     .mock { justify-self: center; width: min(390px, 100%); display: grid; gap: 14px; }
     .card-dark { background: var(--night-2); border: 1px solid var(--night-3); border-radius: 22px; padding: 20px; box-shadow: 0 40px 80px -30px rgba(0,0,0,.6); }
@@ -237,19 +239,22 @@
             <h3>Hızlı Geçiş</h3>
             <div class="price">7.500 ₺ <small>/ 250 $</small></div>
             <ul class="ticks"><li>Mevcut bota Stars faturası</li><li>Ödeme doğrulama ve teslimat</li><li>/paysupport ve /terms</li><li>3 iş günü</li></ul>
-            <a class="btn btn-ghost" href="#" data-contact target="_blank" rel="noopener">Teklif al</a>
+            <a class="btn btn-ghost" data-checkout="hizli-gecis" target="_blank" rel="noopener" hidden>Satın al</a>
+            <p data-checkout-status>Online ödeme şu anda kullanılamıyor.</p>
           </article>
           <article class="plan best">
             <h3>Tam Geçiş</h3>
             <div class="price">15.000 ₺ <small>/ 500 $</small></div>
             <ul class="ticks"><li>Hızlı Geçiş'teki her şey</li><li>Stars abonelikleri</li><li>Mini App vitrini ve kütüphane</li><li>İade akışı ve sipariş takibi</li><li>Mevcut aboneleri taşıma planı</li><li>Stars fiyatlandırma hesabı</li><li>7 iş günü</li></ul>
-            <a class="btn btn-gold" href="#" data-contact target="_blank" rel="noopener">Teklif al</a>
+            <a class="btn btn-gold" data-checkout="tam-gecis" target="_blank" rel="noopener" hidden>Satın al</a>
+            <p data-checkout-status>Online ödeme şu anda kullanılamıyor.</p>
           </article>
           <article class="plan">
             <h3>Bakım</h3>
             <div class="price">2.000 ₺ <small>/ ay · 70 $</small></div>
             <ul class="ticks"><li>Telegram API değişikliklerini takip</li><li>İade ve şikayet yönetimi</li><li>Aylık satış raporu</li></ul>
-            <a class="btn btn-ghost" href="#" data-contact target="_blank" rel="noopener">Bilgi al</a>
+            <a class="btn btn-ghost" data-checkout="bakim" target="_blank" rel="noopener" hidden>Satın al</a>
+            <p data-checkout-status>Online ödeme şu anda kullanılamıyor.</p>
           </article>
         </div>
       </div>
@@ -316,12 +321,24 @@
   (() => {
     "use strict";
     document.getElementById("year").textContent = String(new Date().getFullYear());
-    fetch("/api/config").then((r) => r.json()).then((cfg) => {
+    fetch("/api/config").then((r) => r.ok ? r.json() : null).then((cfg) => {
+      if (!cfg) return;
       const bot = cfg.bot_username ? `https://t.me/${cfg.bot_username}` : "";
       const contact = cfg.contact_url || bot;
       if (bot) document.querySelectorAll("[data-demo]").forEach((a) => { a.href = bot; });
       if (contact) document.querySelectorAll("[data-contact]").forEach((a) => { a.href = contact; });
-    }).catch(() => { /* links stay as anchors */ });
+      document.querySelectorAll("[data-checkout]").forEach((a) => {
+        const payment = cfg.checkout_urls?.[a.dataset.checkout];
+        const destination = payment || cfg.contact_url;
+        if (!destination) return;
+        const url = new URL(destination);
+        if (url.protocol !== "https:") return;
+        a.href = url.href;
+        a.textContent = payment ? "Satın al" : "Satış ekibine yaz";
+        a.hidden = false;
+        a.nextElementSibling.hidden = true;
+      });
+    }).catch(() => { /* Keep payment availability visible if configuration cannot load. */ });
   })();
   </script>
 </body>

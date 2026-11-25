@@ -78,7 +78,8 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
     async def config():
         return {"shop_name": settings.shop_name, "sales_enabled": settings.sales_enabled,
                 "support": settings.support_text, "terms": settings.terms_text,
-                "bot_username": settings.bot_username, "contact_url": settings.contact_url}
+                "bot_username": settings.bot_username, "contact_url": settings.contact_url,
+                "checkout_urls": dict(settings.checkout_urls)}
 
     @app.get("/api/products")
     async def list_products():

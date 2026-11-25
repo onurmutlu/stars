@@ -6,6 +6,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # Telegram only accepts 30-day periods for Star subscriptions.
 SUBSCRIPTION_PERIOD = 2592000
@@ -94,6 +95,7 @@ class Settings:
     admin_ids: frozenset[int] = frozenset()
     init_data_max_age: int = 86400
     order_ttl: int = 3600
+    checkout_urls: tuple[tuple[str, str], ...] = ()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -115,6 +117,15 @@ class Settings:
             admin_ids=frozenset(int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x),
             init_data_max_age=int(os.getenv("INIT_DATA_MAX_AGE", "86400")),
             order_ttl=int(os.getenv("ORDER_TTL", "3600")),
+            checkout_urls=tuple(
+                (plan, url.strip())
+                for plan, key in (
+                    ("hizli-gecis", "CHECKOUT_HIZLI_GECIS_URL"),
+                    ("tam-gecis", "CHECKOUT_TAM_GECIS_URL"),
+                    ("bakim", "CHECKOUT_BAKIM_URL"),
+                )
+                if (url := os.getenv(key, "")).strip()
+            ),
         )
         settings.check()
         return settings
@@ -126,5 +137,9 @@ class Settings:
             raise ConfigError("WEBAPP_URL https:// ile başlamalı (Telegram Mini App şartı)")
         if self.contact_url and not self.contact_url.startswith("https://"):
             raise ConfigError("CONTACT_URL https:// ile başlamalı (ör. https://t.me/kullaniciadi)")
+        for plan, url in self.checkout_urls:
+            parsed = urlsplit(url)
+            if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+                raise ConfigError(f"{plan}: ödeme bağlantısı geçerli bir HTTPS adresi olmalı")
         if self.sales_enabled and (not self.support_text or not self.terms_text):
             raise ConfigError("Satış açıkken SUPPORT_TEXT ve TERMS_TEXT zorunlu (/paysupport ve /terms)")
