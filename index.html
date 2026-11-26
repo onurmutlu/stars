@@ -138,6 +138,8 @@
     footer { padding: 40px 0 56px; font-size: 14px; color: var(--muted); }
     footer .wrap { display: flex; flex-wrap: wrap; gap: 14px 28px; }
     footer a { text-decoration: none; }
+    #demo [hidden] { display: none; }
+    #demo-delivery { margin-block: 12px; }
   </style>
 </head>
 <body>
@@ -155,8 +157,8 @@
 
     <div class="wrap hero">
       <div>
-        <span class="alert">⚠️ Telegram, 17 Kasım 2026'da geliştiricileri uyardı</span>
-        <h1>Botun artık sadece <span class="star">⭐ Stars</span> ile satış yapabilir. Hazır mı?</h1>
+        
+        <h1>Mevcut botuna <span class="star">Telegram Stars</span> ödemesi kuruyoruz.</h1>
         <p class="lead">Telegram botları ve Mini App'ler dijital ürün, abonelik ve AI erişimini artık sadece Telegram Stars ile satabiliyor. Ödeme, teslimat, iade ve <code>/paysupport</code> dahil hazır Stars altyapımızı mevcut botuna <b style="color:#fff">3 iş gününde</b> kuruyoruz.</p>
         <div class="cta">
           <a class="btn btn-gold" href="https://github.com/onurmutlu" target="_blank" rel="noopener">GitHub profili</a>
@@ -272,9 +274,21 @@
           <div style="display:grid;gap:12px">
             <p class="eyebrow">Mağaza demosu</p>
             <h2>Kendin dene.</h2>
-            <p class="muted">Bir örnek ürün seçip ödeme önizlemesini gör. Demo gerçek ödeme almaz.</p>
+            <p class="muted">50 Stars tutarındaki örnek faturayı aç, test ödemesini onayla ve teslim edilen içeriğe bak. Bu simülasyonda bakiyenden Stars düşmez.</p>
           </div>
-          <div><button class="btn btn-dark" type="button" id="preview">Başlangıç Rehberi · 50 ⭐</button><p id="preview-result" role="status"></p></div>
+          <div>
+            <button class="btn btn-dark" type="button" id="preview">Başlangıç Rehberi · 50 ⭐</button>
+            <div id="demo-invoice" hidden>
+              <p>Örnek fatura · 50 XTR · Tek seferlik</p>
+              <button class="btn btn-dark" type="button" id="demo-pay">Test ödemesini onayla</button>
+            </div>
+            <p id="preview-result" role="status"></p>
+            <details id="demo-delivery" hidden>
+              <summary>Satın aldıklarım · Başlangıç Rehberi</summary>
+              <p>Bot mesajı: Başlangıç Rehberin hazır. İlk adım olarak ürün adını, Stars fiyatını ve ödeme sonrası açılacak içeriği belirle.</p>
+            </details>
+            <button class="btn btn-dark" type="button" id="demo-reset" hidden>Yeniden dene</button>
+          </div>
         </div>
       </div>
     </section>
@@ -316,8 +330,32 @@
   (() => {
     "use strict";
     document.getElementById("year").textContent = String(new Date().getFullYear());
-    document.getElementById("preview").addEventListener("click", () => {
-      document.getElementById("preview-result").textContent = "Ödeme önizlemesi · Başlangıç Rehberi · 50 XTR. Tutar tahsil edilmedi.";
+    const preview = document.getElementById("preview");
+    const invoice = document.getElementById("demo-invoice");
+    const pay = document.getElementById("demo-pay");
+    const result = document.getElementById("preview-result");
+    const delivery = document.getElementById("demo-delivery");
+    const reset = document.getElementById("demo-reset");
+
+    preview.addEventListener("click", () => {
+      preview.hidden = true;
+      invoice.hidden = false;
+      pay.focus();
+    });
+    pay.addEventListener("click", () => {
+      invoice.hidden = true;
+      result.textContent = "Test ödemesi doğrulandı. Örnek içerik teslim edildi.";
+      delivery.hidden = false;
+      reset.hidden = false;
+      delivery.querySelector("summary").focus();
+    });
+    reset.addEventListener("click", () => {
+      delivery.open = false;
+      delivery.hidden = true;
+      reset.hidden = true;
+      result.textContent = "";
+      preview.hidden = false;
+      preview.focus();
     });
   })();
   </script>
