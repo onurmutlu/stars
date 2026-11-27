@@ -96,9 +96,9 @@ class Hub:
             webapp_url=f"{settings.base_url}/panel", support_text=settings.support_text,
             terms_text=settings.terms_text, shop_name=settings.name, sales_enabled=settings.billing_enabled,
             admin_ids=settings.admin_ids, init_data_max_age=settings.init_data_max_age)
-        pro = Product(PRO_ID, "Mağaza Pro", f"{settings.pro_shops} mağaza, mağaza başına {settings.pro_products} ürün, "
-                      "markasız vitrin. 30 günde bir yenilenir.", settings.pro_stars,
-                      f"Pro planın aktif 🎉 Panel: {settings.base_url}/panel", kind="subscription")
+        pro = Product(PRO_ID, "Mağaza Lisansı (Pro)", f"{settings.pro_shops} mağaza, mağaza başına {settings.pro_products} ürün, "
+                      "markasız vitrin. 30 günde bir otomatik uzar.", settings.pro_stars,
+                      f"Lisansın aktif 🎉 Panel: {settings.base_url}/panel", kind="subscription")
         self.billing = StarsShop(self.hub_api, billing_settings, {PRO_ID: pro},
                                  billing_store or Store(Path(settings.data_dir) / "billing.sqlite3"))
 
@@ -251,9 +251,9 @@ class Hub:
         if private and text and not text.startswith("/") and TOKEN_RE.match(text.strip()):
             await self._token_message(sender["id"], message)
             return
-        command, _ = _command(text)
+        command, argument = _command(text)
         if private and text and command not in ("/paysupport", "/terms", "/orders", "/refund", "/issues"):
-            await self._hub_command(sender["id"], command)
+            await self._hub_command(sender["id"], command, argument)
             return
         await process_update(self.billing, update, self.failures.setdefault("__hub__", {}))
 
@@ -281,7 +281,40 @@ class Hub:
         await self._say(owner, f"✅ @{tenant['username']} bağlandı (token mesajını sildim).\n"
                                f"Şimdi panelden ürün ekle, destek ve koşul metnini yaz, satışı aç.{warning}")
 
-    async def _hub_command(self, owner: int, command: str) -> None:
+    def buy_link(self) -> str:
+        """Deep link that sells the license: the hub bot answers with a Stars invoice."""
+        return f"https://t.me/{self.settings.bot_username}?start=lisans" if self.settings.bot_username else ""
+
+    def panel_link(self) -> str:
+        return f"https://t.me/{self.settings.bot_username}?start=panel" if self.settings.bot_username \
+            else f"{self.settings.base_url}/panel"
+
+    async def _license(self, owner: int) -> None:
+        self.registry.ensure_owner(owner)
+        until = self.pro_until(owner)
+        if until:
+            day = time.strftime("%d.%m.%Y", time.localtime(until))
+            await self._say(owner, f"Lisansın aktif: {day} tarihine kadar. Her 30 günde {self.settings.pro_stars}⭐ ile "
+                                   "otomatik uzar; Telegram ayarlarından iptal edebilirsin.")
+            return
+        if not self.settings.billing_enabled:
+            await self._say(owner, "Lisans satışı şu an kapalı.")
+            return
+        invoice = await self.billing.create_invoice(owner, PRO_ID)
+        await self.hub_api(
+            "sendMessage", chat_id=owner,
+            text=f"Mağaza Lisansı (Pro): {self.settings.pro_shops} mağaza, mağaza başına {self.settings.pro_products} "
+                 f"ürün, markasız vitrin.\n⭐ {self.settings.pro_stars} / 30 gün, otomatik uzar.",
+            reply_markup={"inline_keyboard": [
+                [{"text": f"⭐ {self.settings.pro_stars} ile lisans al", "url": invoice["invoice_link"]}],
+                [{"text": "🧰 Paneli aç", "web_app": {"url": f"{self.settings.base_url}/panel"}}],
+            ]},
+        )
+
+    async def _hub_command(self, owner: int, command: str, argument: str = "") -> None:
+        if command in ("/lisans", "/license", "/satinal") or (command == "/start" and argument == "lisans"):
+            await self._license(owner)
+            return
         if command in ("/yenimagaza", "/newshop"):
             await self._say(owner, "1) @BotFather → /newbot ile bir bot aç (ya da mevcut botunu kullan).\n"
                                    "2) Token'ı buraya yapıştır ya da panelde 'Mağaza bağla'ya gir.\n"
@@ -298,7 +331,7 @@ class Hub:
             names = {"pro": "Pro", "trial": "Deneme (Pro özellikleri)", "free": "Ücretsiz"}
             await self._say(owner, f"Planın: {names[plan.name]}{' · ' + until + ' tarihine kadar' if until else ''}\n"
                                    f"{plan.max_shops} mağaza, mağaza başına {plan.max_products} ürün."
-                                   + (f"\nPro: ayda {self.settings.pro_stars}⭐, panelden alınır." if plan.name != "pro" else ""))
+                                   + (f"\nLisans: {self.settings.pro_stars}⭐ / 30 gün. Satın al: /lisans" if plan.name != "pro" else ""))
         else:
             self.registry.ensure_owner(owner)
             await self._say(owner, f"{self.settings.name}: Telegram botun için hazır Stars mağazası.\n\n"
@@ -446,7 +479,7 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         return FileResponse(WEBAPP_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/s/{slug}/api/config")
-    async def shop_config(slug: str):
+    async def shop_config(slug: str, x_telegram_init_data: str | None = Header(None)):
         tenant = tenant_by_slug(slug)
         shop_settings = registry.shop_settings(tenant)
         body = {"shop_name": shop_settings.shop_name, "sales_enabled": shop_settings.sales_enabled,
@@ -455,6 +488,15 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         if hub.plan(tenant["owner"]).branding:
             link = f"https://t.me/{settings.bot_username}" if settings.bot_username else settings.base_url
             body["powered_by"] = {"text": f"{settings.name} ile yapıldı", "url": link}
+            if hub.buy_link():
+                body["buy"] = {"text": f"Sen de Stars mağazası aç · ⭐{settings.pro_stars}/30 gün", "url": hub.buy_link()}
+        try:
+            viewer = initdata.validate(x_telegram_init_data or "", shop_settings.bot_token,
+                                       settings.init_data_max_age)["id"]
+        except initdata.InvalidInitData:
+            viewer = None
+        if viewer == tenant["owner"]:
+            body["admin_url"] = hub.panel_link()  # only the shop owner sees the way to the panel
         return body
 
     @app.get("/s/{slug}/api/products")

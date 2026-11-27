@@ -414,3 +414,30 @@ def test_hub_settings_validation():
     with pytest.raises(Exception):
         hub_settings(base_url="http://x").check()
     hub_settings().check()
+
+
+def test_license_link_sells_pro_in_the_hub_chat(world):
+    with TestClient(build(world, trial_days=0)) as client:
+        hub_hook(client, text_update("/start lisans", SELLER))
+        bot = world.bots[HUB_TOKEN]
+        (invoice,) = bot.of("createInvoiceLink")
+        assert invoice["subscription_period"] == 2592000
+        button = bot.of("sendMessage")[-1]["reply_markup"]["inline_keyboard"][0][0]
+        assert "lisans al" in button["text"] and button["url"]
+        order_id = invoice["payload"]
+        expires = int(time.time()) + 2592000
+        hub_hook(client, paid_update(order_id, SELLER, invoice["prices"][0]["amount"], "pro-9",
+                                     subscription_expiration_date=expires, is_recurring=True))
+        hub_hook(client, text_update("/lisans", SELLER))
+        assert "aktif" in bot.of("sendMessage")[-1]["text"] and len(bot.of("createInvoiceLink")) == 1
+
+
+def test_shop_shows_admin_link_only_to_its_owner_and_buy_link_on_free_plan(world):
+    with TestClient(build(world, trial_days=0)) as client:
+        shop = ready_shop(client)
+        url = f"/s/{shop['username']}/api/config"
+        assert client.get(url, headers=buyer(TOKEN_A, SELLER)).json()["admin_url"] == "https://t.me/HubBot?start=panel"
+        stranger = client.get(url, headers=buyer(TOKEN_A)).json()
+        assert "admin_url" not in stranger and stranger["buy"]["url"] == "https://t.me/HubBot?start=lisans"
+        # a session signed by another bot is not the owner of this shop
+        assert "admin_url" not in client.get(url, headers=buyer(TOKEN_B, SELLER)).json()

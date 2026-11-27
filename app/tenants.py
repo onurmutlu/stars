@@ -98,7 +98,7 @@ class HubSettings:
     terms_text: str
     name: str = "SiyahKare Stars"
     bot_username: str = ""
-    pro_stars: int = 500
+    pro_stars: int = 1000
     trial_days: int = 14
     billing_enabled: bool = True
     admin_ids: frozenset[int] = frozenset()
@@ -125,7 +125,7 @@ class HubSettings:
             terms_text=env("HUB_TERMS_TEXT", ""),
             name=env("HUB_NAME", "SiyahKare Stars"),
             bot_username=env("HUB_BOT_USERNAME", "").lstrip("@"),
-            pro_stars=int(env("HUB_PRO_STARS", "500")),
+            pro_stars=int(env("HUB_PRO_STARS", "1000")),
             trial_days=int(env("HUB_TRIAL_DAYS", "14")),
             billing_enabled=_bool(env("HUB_BILLING_ENABLED", "true")),
             admin_ids=frozenset(int(x) for x in env("HUB_ADMIN_IDS", "").replace(" ", "").split(",") if x),

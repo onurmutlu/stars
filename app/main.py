@@ -75,11 +75,21 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
         return {"ok": True}
 
     @app.get("/api/config")
-    async def config():
-        return {"shop_name": settings.shop_name, "sales_enabled": settings.sales_enabled,
+    async def config(x_telegram_init_data: str | None = Header(None)):
+        body = {"shop_name": settings.shop_name, "sales_enabled": settings.sales_enabled,
                 "support": settings.support_text, "terms": settings.terms_text,
                 "bot_username": settings.bot_username, "contact_url": settings.contact_url,
                 "checkout_urls": dict(settings.checkout_urls)}
+        if settings.buy_url:
+            body["buy"] = {"text": settings.buy_text or "Sen de Stars mağazası aç", "url": settings.buy_url}
+        if settings.admin_url and x_telegram_init_data:
+            try:
+                viewer = initdata.validate(x_telegram_init_data, settings.bot_token, settings.init_data_max_age)["id"]
+            except initdata.InvalidInitData:
+                viewer = None
+            if viewer in settings.admin_ids:
+                body["admin_url"] = settings.admin_url  # only admins see the way to the admin screen
+        return body
 
     @app.get("/api/products")
     async def list_products():

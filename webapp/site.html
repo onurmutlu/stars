@@ -60,7 +60,7 @@
     .cta { display: flex; flex-wrap: wrap; gap: 12px; }
     .fine { margin-top: 16px; font-size: 14px; color: var(--soft); }
 
-    [data-checkout][hidden] { display: none; }
+    [data-checkout][hidden], [data-buy-section][hidden] { display: none; }
 
     /* invoice mock */
     .mock { justify-self: center; width: min(390px, 100%); display: grid; gap: 14px; }
@@ -284,6 +284,19 @@
       </div>
     </section>
 
+    <section id="lisans" data-buy-section hidden>
+      <div class="wrap">
+        <div class="demo">
+          <div style="display:grid;gap:12px">
+            <p class="eyebrow">Kendin kur</p>
+            <h2>Hazır Stars mağazası: ⭐ 1.000 / 30 gün</h2>
+            <p class="muted">Kurulum hizmeti istemiyorsan botunu kendin bağla: ürünlerini ekle, Stars ile satışa başla. 5 mağaza, mağaza başına 100 ürün, markasız vitrin. Lisans her 30 günde otomatik uzar, Telegram ayarlarından iptal edilir.</p>
+          </div>
+          <a class="btn btn-gold" href="#" data-buy target="_blank" rel="noopener">⭐ 1.000 ile lisans al</a>
+        </div>
+      </div>
+    </section>
+
     <section id="sss" class="alt">
       <div class="wrap">
         <div class="head"><p class="eyebrow">Sık sorulanlar</p><h2>Merak ettiklerin</h2></div>
@@ -330,6 +343,10 @@
       const contact = cfg.contact_url || bot;
       if (bot) document.querySelectorAll("[data-demo]").forEach((a) => { a.href = bot; });
       if (contact) document.querySelectorAll("[data-contact]").forEach((a) => { a.href = contact; });
+      if (cfg.buy && /^https:\/\//.test(cfg.buy.url)) {
+        document.querySelectorAll("[data-buy]").forEach((a) => { a.href = cfg.buy.url; });
+        document.querySelectorAll("[data-buy-section]").forEach((node) => { node.hidden = false; });
+      }
       document.querySelectorAll("[data-checkout]").forEach((a) => {
         const payment = cfg.checkout_urls?.[a.dataset.checkout];
         const destination = payment || cfg.contact_url;

@@ -263,3 +263,16 @@ def test_marketing_site_and_app_are_served(client):
     assert "telegram-web-app.js" in client.get("/app").text
     cfg = client.get("/api/config").json()
     assert {"bot_username", "contact_url"} <= set(cfg) and "bot_token" not in cfg
+
+
+def test_config_admin_link_only_for_admins_and_buy_link_for_all(api, store):
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    from tests.conftest import PRODUCTS, make_settings
+    settings = make_settings(admin_url="https://t.me/HubBot?start=panel", buy_url="https://t.me/HubBot?start=lisans",
+                             buy_text="Sen de aç")
+    with TestClient(create_app(settings, PRODUCTS, store, api, background=False)) as client:
+        assert client.get("/api/config", headers=headers(ADMIN)).json()["admin_url"].endswith("start=panel")
+        public = client.get("/api/config", headers=headers(BUYER)).json()
+        assert "admin_url" not in public and public["buy"] == {"text": "Sen de aç", "url": "https://t.me/HubBot?start=lisans"}
+        assert "admin_url" not in client.get("/api/config").json()

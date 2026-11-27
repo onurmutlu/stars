@@ -18,7 +18,7 @@
       paid: "Ödeme alındı 🎉", cancelled: "Ödeme iptal edildi.", failed: "Ödeme tamamlanamadı.",
       waiting: "Ödeme onaylanıyor…", slow: "Ödeme alındı; içerik birkaç dakika içinde bot üzerinden de gelecek.",
       error: "Bir şeyler ters gitti. Tekrar dene.", until: "Geçerlilik:", refunded: "İade edildi", expired: "Süresi doldu",
-      share_text: "{title} · ⭐ {n}", per_month: "/ 30 gün",
+      share_text: "{title} · ⭐ {n}", per_month: "/ 30 gün", admin: "⚙️ Yönetim",
     },
     en: {
       tab_shop: "Shop", tab_library: "My purchases", support: "Payment support", terms: "Terms",
@@ -33,7 +33,7 @@
       paid: "Payment received 🎉", cancelled: "Payment cancelled.", failed: "Payment failed.",
       waiting: "Confirming payment…", slow: "Payment received; the bot will also send your content in a few minutes.",
       error: "Something went wrong. Please try again.", until: "Valid until:", refunded: "Refunded", expired: "Expired",
-      share_text: "{title} · ⭐ {n}", per_month: "/ 30 days",
+      share_text: "{title} · ⭐ {n}", per_month: "/ 30 days", admin: "⚙️ Admin",
     },
   };
   const t = (key, vars = {}) => {
@@ -410,6 +410,15 @@
       $("shop-name").textContent = config.shop_name;
       $("shop-logo").textContent = (config.shop_name.trim()[0] || "⭐").toUpperCase();
       document.title = config.shop_name;
+      if (config.admin_url && /^https:\/\//.test(config.admin_url)) {
+        $("admin").hidden = false;
+        $("admin").addEventListener("click", () => openLink(config.admin_url));
+      }
+      if (config.buy && /^https:\/\//.test(config.buy.url)) {
+        $("buy-text").textContent = config.buy.text;
+        $("buy-banner").hidden = false;
+        $("buy-banner").addEventListener("click", () => { haptic("light"); openLink(config.buy.url); });
+      }
       if (config.powered_by && /^https:\/\//.test(config.powered_by.url)) {
         const link = el("button", "link", config.powered_by.text);
         link.addEventListener("click", () => openLink(config.powered_by.url));

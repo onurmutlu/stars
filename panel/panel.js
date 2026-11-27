@@ -11,7 +11,7 @@
   };
   const fmtDate = (s) => new Date(s * 1000).toLocaleDateString("tr-TR", { day: "numeric", month: "short", year: "numeric" });
   const fmtNum = (n) => Number(n || 0).toLocaleString("tr-TR");
-  const PLAN_NAMES = { pro: "Pro", trial: "Deneme", free: "Ücretsiz" };
+  const PLAN_NAMES = { pro: "Lisanslı (Pro)", trial: "Deneme", free: "Ücretsiz" };
 
   let me = null;       // /panel/api/me
   let shop = null;     // current shop detail
@@ -113,9 +113,11 @@
       el("span", "limits", `${p.max_shops} mağaza · mağaza başına ${p.max_products} ürün · ${p.branding ? "vitrinde platform etiketi" : "markasız vitrin"}`),
     );
     if (p.name !== "pro" && me.billing_enabled) {
-      const button = el("button", "btn", `Pro'ya geç · ⭐${fmtNum(me.pro_stars)}/ay`);
+      const button = el("button", "btn", `Lisans satın al · ⭐${fmtNum(me.pro_stars)} / 30 gün`);
       button.addEventListener("click", () => guarded(button, buyPro));
       card.append(button);
+    } else if (p.name === "pro") {
+      card.append(el("span", "limits", `Lisansın her 30 günde ⭐${fmtNum(me.pro_stars)} ile otomatik uzar. İptal: Telegram → Ayarlar → Stars.`));
     }
   }
 
@@ -127,7 +129,7 @@
       toast("Ödeme alındı, plan açılıyor…");
       for (let i = 0; i < 10; i += 1) {
         try {
-          if ((await api(`/panel/api/plan/orders/${orderId}`)).status === "paid") { toast("Pro aktif 🎉"); return loadHome(); }
+          if ((await api(`/panel/api/plan/orders/${orderId}`)).status === "paid") { toast("Lisans aktif 🎉"); return loadHome(); }
         } catch (_) { /* retry */ }
         await new Promise((r) => setTimeout(r, 1500));
       }

@@ -115,6 +115,9 @@ class Settings:
     shop_name: str = "Stars Mağaza"
     bot_username: str = ""
     contact_url: str = ""               # where the marketing site's "talk to us" buttons go
+    admin_url: str = ""                 # shown to ADMIN_IDS in the Mini App (e.g. the Hub panel)
+    buy_url: str = ""                   # "get your own shop / license" link in the Mini App and site
+    buy_text: str = ""
     sales_enabled: bool = False
     db_path: str = "data/shop.sqlite3"
     products_path: str = "products.json"
@@ -137,6 +140,9 @@ class Settings:
             shop_name=os.getenv("SHOP_NAME", "Stars Mağaza"),
             bot_username=os.getenv("BOT_USERNAME", "").lstrip("@"),
             contact_url=os.getenv("CONTACT_URL", ""),
+            admin_url=os.getenv("ADMIN_URL", "").strip(),
+            buy_url=os.getenv("BUY_URL", "").strip(),
+            buy_text=os.getenv("BUY_TEXT", "").strip(),
             sales_enabled=_bool(os.getenv("SALES_ENABLED")),
             db_path=os.getenv("DB_PATH", "data/shop.sqlite3"),
             products_path=os.getenv("PRODUCTS_PATH", "products.json"),
@@ -161,6 +167,9 @@ class Settings:
             raise ConfigError("WEBHOOK_SECRET en az 32 karakter olmalı (A-Z, a-z, 0-9, _ ve -)")
         if not self.webapp_url.startswith("https://"):
             raise ConfigError("WEBAPP_URL https:// ile başlamalı (Telegram Mini App şartı)")
+        for name, url in (("ADMIN_URL", self.admin_url), ("BUY_URL", self.buy_url)):
+            if url and not url.startswith("https://"):
+                raise ConfigError(f"{name} https:// ile başlamalı")
         if self.contact_url and not self.contact_url.startswith("https://"):
             raise ConfigError("CONTACT_URL https:// ile başlamalı (ör. https://t.me/kullaniciadi)")
         for plan, url in self.checkout_urls:

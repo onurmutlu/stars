@@ -16,6 +16,7 @@
         <h1 id="shop-name">Stars Mağaza</h1>
         <p class="tagline" data-i18n="tagline">Telegram Stars ile güvenli ödeme · anında teslim</p>
       </div>
+      <button class="admin" id="admin" type="button" hidden data-i18n="admin">⚙️ Yönetim</button>
     </div>
     <nav class="tabs" role="tablist">
       <button class="tab active" data-tab="shop" role="tab" aria-selected="true"><span data-i18n="tab_shop">Mağaza</span></button>
@@ -30,6 +31,11 @@
         <div class="chips" id="chips" role="tablist"></div>
       </div>
       <div id="products" class="grid" aria-live="polite"></div>
+      <button class="buy-banner" id="buy-banner" type="button" hidden>
+        <span class="buy-icon" aria-hidden="true">🛒</span>
+        <span id="buy-text"></span>
+        <span aria-hidden="true">›</span>
+      </button>
     </section>
 
     <section id="view-detail" class="view" hidden>
