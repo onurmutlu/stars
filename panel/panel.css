@@ -55,3 +55,17 @@ textarea { resize: vertical; }
 .pay-item { gap: 2px; }
 .pay-item .meta { font-size: 12px; color: var(--hint); }
 p.muted.small { font-size: 12.5px; margin: -4px 0 4px; }
+
+.funnel { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 8px; }
+.funnel .step { background: var(--bg); border-radius: 10px; padding: 8px 4px; text-align: center; cursor: pointer; border: 1px solid transparent; }
+.funnel .step.active { border-color: var(--btn); }
+.funnel .step b { display: block; font-size: 17px; font-variant-numeric: tabular-nums; }
+.funnel .step span { font-size: 11px; color: var(--hint); }
+.cust-item { gap: 4px; cursor: pointer; }
+.cust-item .row { margin-top: 0; }
+.cust-item h3 { font-size: 14.5px; }
+.cust-item .meta { font-size: 12px; color: var(--hint); }
+.cust-item .more { display: grid; gap: 8px; margin-top: 6px; cursor: default; }
+.badge.stage-sepette { background: color-mix(in srgb, #f5a623 22%, transparent); color: #b7791f; }
+.badge.stage-müşteri, .badge.stage-abone { background: color-mix(in srgb, #2fa84f 18%, transparent); color: #2f8a46; }
+.badge.stage-iade { background: color-mix(in srgb, #e5484d 16%, transparent); color: #e5484d; }

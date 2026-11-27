@@ -17,6 +17,9 @@
   let shop = null;     // current shop detail
   let editing = null;  // product id being edited, or null for a new one
   let busy = false;
+  let customers = { funnel: {}, customers: [] };
+  let stageFilter = "";
+  const STAGES = ["ziyaretçi", "sepette", "müşteri", "abone", "iade"];
 
   // ---------------------------------------------------------------- api
   async function api(path, options = {}) {
@@ -171,6 +174,78 @@
     shop = await api(`/panel/api/shops/${id}`);
     renderShop();
     show("shop");
+    loadCustomers().catch((error) => toast(error.message));
+  }
+
+  // ---------------------------------------------------------------- customers (CRM)
+  async function loadCustomers() {
+    customers = await api(`/panel/api/shops/${shop.id}/customers`);
+    renderCustomers();
+  }
+
+  function renderCustomers() {
+    $("funnel").replaceChildren(...STAGES.map((stage) => {
+      const step = el("button", "step" + (stage === stageFilter ? " active" : ""));
+      step.append(el("b", "", fmtNum(customers.funnel[stage])), el("span", "", stage));
+      step.addEventListener("click", () => { stageFilter = stageFilter === stage ? "" : stage; renderCustomers(); });
+      return step;
+    }));
+    const list = customers.customers.filter((c) => !stageFilter || c.stage === stageFilter);
+    $("customer-count").textContent = fmtNum(customers.customers.length);
+    $("customers").replaceChildren(...(list.length ? list.slice(0, 100).map(customerItem)
+      : [el("div", "empty", stageFilter ? "Bu aşamada kimse yok." : "Henüz kimse botunla konuşmadı. Bot linkini kanalında paylaş.")]));
+  }
+
+  function customerItem(c) {
+    const card = el("article", "card cust-item");
+    const row = el("div", "row");
+    row.append(el("h3", "", (c.name || "İsimsiz") + (c.username ? ` · @${c.username}` : "")),
+      el("span", `badge stage-${c.stage}`, c.stage));
+    const details = [`son: ${fmtDate(c.last_seen)}`];
+    if (c.spent) details.push(`⭐${fmtNum(c.spent)}`);
+    if (c.source) details.push(`kaynak: ${c.source}`);
+    card.append(row, el("span", "meta", details.join(" · ")));
+    if (c.note) card.append(el("span", "meta", `📝 ${c.note}`));
+    card.addEventListener("click", (event) => {
+      if (card.querySelector(".more") || event.target.closest(".more")) return;
+      card.append(customerActions(c));
+    });
+    return card;
+  }
+
+  function customerActions(c) {
+    const box = el("div", "more");
+    const text = el("textarea");
+    text.rows = 2;
+    text.maxLength = 4096;
+    text.placeholder = "Mesaj (botun üzerinden gider)";
+    const send = el("button", "btn small", "Gönder");
+    send.addEventListener("click", () => guarded(send, async () => {
+      if (!text.value.trim()) return;
+      await api(`/panel/api/shops/${shop.id}/customers/${c.user}/message`, json("POST", { text: text.value.trim() }));
+      text.value = "";
+      toast("Mesaj gönderildi.");
+    }));
+    const note = el("input");
+    note.maxLength = 500;
+    note.placeholder = "Not: ör. 'pazartesi ara', 'VIP ilgili'";
+    note.value = c.note || "";
+    const save = el("button", "btn small ghost", "Notu kaydet");
+    save.addEventListener("click", () => guarded(save, async () => {
+      await api(`/panel/api/shops/${shop.id}/customers/${c.user}/note`, json("PUT", { note: note.value }));
+      c.note = note.value.trim() || null;
+      toast("Not kaydedildi.");
+      renderCustomers();
+    }));
+    const actions = el("div", "actions");
+    actions.append(send, save);
+    if (c.username) {
+      const chat = el("button", "btn small ghost", "Telegram'da aç");
+      chat.addEventListener("click", () => openLink(`https://t.me/${c.username}`));
+      actions.append(chat);
+    }
+    box.append(text, note, actions);
+    return box;
   }
 
   function renderShop() {
@@ -355,6 +430,7 @@
     $("sales").addEventListener("click", () => guarded($("sales"), toggleSales));
     $("save-settings").addEventListener("click", () => guarded($("save-settings"), saveSettings));
     $("add-product").addEventListener("click", () => openProduct(null));
+    $("refresh-customers").addEventListener("click", () => guarded($("refresh-customers"), loadCustomers));
     $("save-product").addEventListener("click", () => guarded($("save-product"), saveProduct));
     $("resync").addEventListener("click", () => guarded($("resync"), async () => {
       shop = { ...shop, ...(await api(`/panel/api/shops/${shop.id}/sync`, { method: "POST" })) };

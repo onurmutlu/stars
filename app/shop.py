@@ -249,7 +249,7 @@ class StarsShop:
 
     async def tick(self, now: float | None = None) -> None:
         """Background work, once a minute: deliveries, channel removals, daily summary."""
-        for job in (self.redeliver, self.sweep_channels, self.daily_summary):
+        for job in (self.redeliver, self.sweep_channels, self.daily_summary, self.remind_carts):
             try:
                 await job(now)
             except Exception as exc:  # noqa: BLE001 - one job must not stop the others
@@ -281,6 +281,9 @@ class StarsShop:
         sender = message.get("from") or {}
         if message.get("chat", {}).get("type") != "private" or sender.get("is_bot"):
             return
+        text = message.get("text") or ""
+        start_source = text.partition(" ")[2].strip() if text.split("@")[0].startswith("/start") else None
+        self.store.touch_contact(sender, start_source)
         if message.get("successful_payment"):
             await self._successful_payment(sender["id"], message["successful_payment"], sender)
         elif message.get("refunded_payment"):
@@ -290,8 +293,86 @@ class StarsShop:
             self.store.mark_refunded(refunded["telegram_payment_charge_id"])
             if first and self.settings.notify_sales:
                 await self.notify_admins(f"↩️ İade: ⭐{refunded.get('total_amount', '?')} · {_who(sender)}")
-        elif message.get("text"):
-            await self._command(sender["id"], message["text"])
+        elif sender["id"] in self.settings.admin_ids and message.get("reply_to_message"):
+            await self._admin_reply(sender["id"], message)
+        elif text.startswith("/"):
+            await self._command(sender["id"], text)
+        elif sender["id"] not in self.settings.admin_ids and (text or message.get("message_id")):
+            await self._customer_message(sender, message)
+        elif text:
+            await self._command(sender["id"], text)
+
+    # ------------------------------------------------------------------ customer inbox
+    async def _customer_message(self, sender: dict, message: dict) -> None:
+        """A customer wrote to the shop bot: hand it to the admins; their reply goes back."""
+        if not self.settings.admin_ids:
+            await self._command(sender["id"], "/start")
+            return
+        header = f"💬 {_who(sender)}"
+        for admin in self.settings.admin_ids:
+            try:
+                if message.get("text"):
+                    sent = await self.api("sendMessage", chat_id=admin,
+                                          text=f"{header}\n\n{message['text']}\n\n↩️ Cevaplamak için bu mesajı yanıtla.")
+                else:
+                    await self.api("sendMessage", chat_id=admin, text=f"{header} bir dosya gönderdi ↓ (yanıtla)")
+                    sent = await self.api("forwardMessage", chat_id=admin, from_chat_id=sender["id"],
+                                          message_id=message["message_id"])
+                if isinstance(sent, dict) and sent.get("message_id"):
+                    self.store.link_inbox(admin, sent["message_id"], sender["id"])
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Müşteri mesajı yöneticiye iletilemedi: %s", type(exc).__name__)
+        await self.api("sendMessage", chat_id=sender["id"],
+                       text="Mesajın iletildi, en kısa sürede buradan cevap vereceğiz. 🙏",
+                       reply_markup={"inline_keyboard": [[{"text": "🛍 Mağazayı aç",
+                                                           "web_app": {"url": self.settings.webapp_url + "/app"}}]]})
+
+    async def _admin_reply(self, admin: int, message: dict) -> None:
+        user = self.store.inbox_user(admin, message["reply_to_message"].get("message_id", 0))
+        if user is None:
+            if message.get("text", "").startswith("/"):
+                await self._command(admin, message["text"])
+            else:
+                await self.api("sendMessage", chat_id=admin,
+                               text="Bu mesaj bir müşteri mesajına ait değil. Müşteriye cevap için onun mesajını yanıtla.")
+            return
+        try:
+            await self.send_to_customer(user, message.get("text"), from_chat=admin, message_id=message["message_id"])
+        except Exception as exc:  # noqa: BLE001
+            await self.api("sendMessage", chat_id=admin, text=f"Gönderilemedi ({type(exc).__name__}). Müşteri botu engellemiş olabilir.")
+            return
+        await self.api("sendMessage", chat_id=admin, text="✅ Müşteriye iletildi.")
+
+    async def send_to_customer(self, user: int, text: str | None, from_chat: int | None = None,
+                               message_id: int | None = None) -> None:
+        """Only people who wrote to the bot or opened the shop are reachable (Telegram's own rule too)."""
+        if text:
+            await self.api("sendMessage", chat_id=user, text=text[:4096])
+        elif from_chat and message_id:
+            await self.api("copyMessage", chat_id=user, from_chat_id=from_chat, message_id=message_id)
+        else:
+            raise ShopError("Boş mesaj gönderilemez.")
+
+    async def remind_carts(self, now: float | None = None) -> int:
+        """One gentle reminder for an order left unpaid for an hour (never twice for the same product)."""
+        if not self.settings.cart_reminder or not self.settings.sales_enabled:
+            return 0
+        now = time.time() if now is None else now
+        sent = 0
+        for order in self.store.abandoned_orders(now):
+            self.store.mark_reminded(order["id"])
+            if order["product"] not in self.products:
+                continue
+            try:
+                await self.api(
+                    "sendMessage", chat_id=order["user"],
+                    text=f"'{order['title']}' siparişin yarım kaldı. Hâlâ istiyorsan tek dokunuşla tamamlayabilirsin.",
+                    reply_markup={"inline_keyboard": [[{"text": f"⭐ {order['stars']} ile tamamla",
+                                                        "web_app": {"url": f"{self.settings.webapp_url}/app?p={order['product']}"}}]]})
+                sent += 1
+            except Exception as exc:  # noqa: BLE001
+                log.info("Sepet hatırlatması gönderilemedi: %s", type(exc).__name__)
+        return sent
 
     async def _pre_checkout(self, query: dict) -> None:
         order = self.store.order(query.get("invoice_payload", ""))
@@ -367,6 +448,18 @@ class StarsShop:
             rows = self.store.open_issues()
             reply = "\n".join(f"{r['reason']} · user={r['user']} · {r['stars']}⭐ · {r['charge']}" for r in rows[:30]) \
                 or "Açık ödeme sorunu yok."
+        elif command in ("/musteriler", "/customers") and user in self.settings.admin_ids:
+            funnel = self.store.funnel()
+            recent = self.store.customers(limit=10)
+            lines = ["👥 Müşteriler",
+                     " · ".join(f"{k}: {v}" for k, v in funnel.items()), ""]
+            for c in recent:
+                who = c["name"] or "?"
+                if c["username"]:
+                    who += f" @{c['username']}"
+                lines.append(f"• {who} — {c['stage']}" + (f" · ⭐{c['spent']}" if c["spent"] else "")
+                             + (f" · kaynak: {c['source']}" if c["source"] else ""))
+            reply = "\n".join(lines) if recent else "Henüz kimse botla konuşmadı."
         elif command in ("/admin", "/yonetim") and user in self.settings.admin_ids:
             rows = []
             if self.settings.admin_url:
@@ -375,7 +468,8 @@ class StarsShop:
                 rows.append([{"text": "🔑 Lisans yönetimi", "url": self.settings.buy_url}])
             rows.append([{"text": "🛍 Mağazayı aç", "web_app": {"url": self.settings.webapp_url + "/app"}}])
             await self.api("sendMessage", chat_id=user,
-                           text="Yönetim\nİade: /refund <charge_id> · Ödeme sorunları: /issues",
+                           text="Yönetim\nMüşteriler: /musteriler · İade: /refund <charge_id> · Ödeme sorunları: /issues\n"
+                                "Müşteri mesajları buraya gelir; cevaplamak için yanıtla.",
                            reply_markup={"inline_keyboard": rows})
             return
         elif command == "/start" and argument.startswith("p_") and argument[2:] in self.products:

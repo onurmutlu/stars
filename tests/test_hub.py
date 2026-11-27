@@ -39,6 +39,8 @@ class FakeBot:
             return self.world.webhooks.get(self.token, {"url": ""})
         if method == "createInvoiceLink":
             return f"https://t.me/$inv-{self.bot_id}-{payload['payload']}"
+        if method in ("sendMessage", "forwardMessage", "copyMessage"):
+            return {"message_id": 700 + len(self.calls)}
         if method == "getChatMember":
             return self.world.members.get((self.token, payload["chat_id"]), {"status": "left"})
         return True
@@ -467,3 +469,25 @@ def test_channel_product_needs_the_bot_as_channel_admin(hub_client, world):
     view = hub_client.get(f"/panel/api/shops/{shop['id']}", headers=panel()).json()
     assert view["channels"] == [{"id": -1009, "title": "Kanalım", "type": "channel", "ready": True}]
     assert "-1009" in world.bots[TOKEN_A].of("sendMessage")[-1]["text"]
+
+
+
+def test_panel_crm_lists_shop_contacts_and_messages_them(hub_client, world):
+    shop = ready_shop(hub_client)
+    slug = shop["username"]
+    # a buyer opens the shop and writes to the bot
+    hub_client.get(f"/s/{slug}/api/purchases", headers=buyer(TOKEN_A))
+    tenant_hook(hub_client, shop["id"], {"update_id": 60, "message": {
+        "message_id": 9, "chat": {"id": BUYER, "type": "private"}, "from": {"id": BUYER, "first_name": "Ayşe"},
+        "text": "Merhaba, VIP ne kadar?"}})
+    bot = world.bots[TOKEN_A]
+    assert any(m["chat_id"] == SELLER and "VIP ne kadar" in m["text"] for m in bot.of("sendMessage"))
+    url = f"/panel/api/shops/{shop['id']}/customers"
+    data = hub_client.get(url, headers=panel()).json()
+    assert data["funnel"]["ziyaretçi"] == 1 and data["customers"][0]["name"] == "Ayşe"
+    assert hub_client.get(url, headers=panel(SELLER2)).status_code == 404
+    sent = hub_client.post(f"{url}/{BUYER}/message", headers=panel(), json={"text": "Merhaba Ayşe, 250⭐"})
+    assert sent.status_code == 200 and bot.of("sendMessage")[-1] == {"chat_id": BUYER, "text": "Merhaba Ayşe, 250⭐"}
+    assert hub_client.post(f"{url}/12345/message", headers=panel(), json={"text": "x"}).status_code == 404
+    assert hub_client.put(f"{url}/{BUYER}/note", headers=panel(), json={"note": "pazartesi ara"}).status_code == 200
+    assert hub_client.get(url, headers=panel()).json()["customers"][0]["note"] == "pazartesi ara"

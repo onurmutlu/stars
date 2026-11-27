@@ -87,9 +87,11 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
 
     def user_id(init_data: str | None) -> int:
         try:
-            return initdata.validate(init_data or "", settings.bot_token, settings.init_data_max_age)["id"]
+            user = initdata.validate(init_data or "", settings.bot_token, settings.init_data_max_age)
         except initdata.InvalidInitData:
             raise HTTPException(401, "Telegram oturumu doğrulanamadı. Mağazayı bot üzerinden yeniden aç.") from None
+        store.touch_contact(user)  # opening the shop counts as a visit in the CRM
+        return user["id"]
 
     @app.exception_handler(ShopError)
     async def shop_error(_request: Request, exc: ShopError):

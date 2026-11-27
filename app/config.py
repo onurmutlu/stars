@@ -142,6 +142,7 @@ class Settings:
     checkout_urls: tuple[tuple[str, str], ...] = ()
     notify_sales: bool = True           # DM admins on every sale, renewal and refund
     summary_hour: int = 9               # local hour of the daily summary to admins; -1 turns it off
+    cart_reminder: bool = True          # one reminder to a buyer who left an order unpaid for an hour
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -168,6 +169,7 @@ class Settings:
             order_ttl=int(os.getenv("ORDER_TTL", "3600")),
             notify_sales=os.getenv("NOTIFY_SALES", "true").strip().lower() not in ("0", "false", "no", "off"),
             summary_hour=int(os.getenv("DAILY_SUMMARY_HOUR", "9")),
+            cart_reminder=os.getenv("CART_REMINDER", "true").strip().lower() not in ("0", "false", "no", "off"),
             checkout_urls=tuple(
                 (plan, url.strip())
                 for plan, key in (

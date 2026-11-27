@@ -397,6 +397,14 @@ class ShopPatch(BaseModel):
     forward_secret: str | None = Field(None, max_length=256)
 
 
+class CustomerMessage(BaseModel):
+    text: str = Field(min_length=1, max_length=4096)
+
+
+class CustomerNote(BaseModel):
+    note: str = Field(max_length=500)
+
+
 class RefundRequest(BaseModel):
     charge: str = Field(min_length=1, max_length=256)
 
@@ -468,9 +476,11 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
 
     def buyer(tenant, init_data: str | None) -> int:
         try:
-            return initdata.validate(init_data or "", registry.token(tenant), settings.init_data_max_age)["id"]
+            user = initdata.validate(init_data or "", registry.token(tenant), settings.init_data_max_age)
         except initdata.InvalidInitData:
             raise HTTPException(401, "Telegram oturumu doğrulanamadı. Mağazayı bot üzerinden yeniden aç.") from None
+        hub.store_for(tenant["id"]).touch_contact(user)
+        return user["id"]
 
     @app.get("/s/{slug}")
     @app.get("/s/{slug}/")
@@ -658,6 +668,33 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         await check_channel(tenant, item)
         registry.save_product(tenant_id, item, hub.plan(tenant["owner"]).max_products, create=False)
         return tenant_view(tenant)
+
+    @app.get("/panel/api/shops/{tenant_id}/customers")
+    async def panel_customers(tenant_id: str, x_telegram_init_data: str | None = Header(None)):
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        store = hub.store_for(tenant["id"])
+        return {"funnel": store.funnel(), "customers": store.customers(limit=300)}
+
+    @app.post("/panel/api/shops/{tenant_id}/customers/{user}/message")
+    async def panel_message_customer(tenant_id: str, user: int, body: CustomerMessage,
+                                     x_telegram_init_data: str | None = Header(None)):
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        store = hub.store_for(tenant["id"])
+        if not store.db.execute("SELECT 1 FROM contacts WHERE user=?", (user,)).fetchone():
+            raise ShopError("Bu kişi mağazanla hiç konuşmamış.", 404)
+        try:
+            await hub.shop(tenant).send_to_customer(user, body.text)
+        except TelegramError as exc:
+            raise ShopError(f"Gönderilemedi: {exc.description}") from None
+        return {"ok": True}
+
+    @app.put("/panel/api/shops/{tenant_id}/customers/{user}/note")
+    async def panel_customer_note(tenant_id: str, user: int, body: CustomerNote,
+                                  x_telegram_init_data: str | None = Header(None)):
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        if not hub.store_for(tenant["id"]).set_note(user, body.note.strip()):
+            raise ShopError("Müşteri bulunamadı.", 404)
+        return {"ok": True}
 
     @app.delete("/panel/api/shops/{tenant_id}/products/{product_id}")
     async def panel_archive_product(tenant_id: str, product_id: str, x_telegram_init_data: str | None = Header(None)):

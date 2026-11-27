@@ -31,6 +31,8 @@ class FakeAPI:
             raise RuntimeError(f"{method} failed")
         if method == "createInvoiceLink":
             return f"https://t.me/$invoice-{payload['payload']}"
+        if method in ("sendMessage", "forwardMessage", "copyMessage"):
+            return {"message_id": 500 + len(self.calls)}
         if method == "createChatInviteLink":
             return {"invite_link": f"https://t.me/+inv{len(self.of('createChatInviteLink')) - 1}"}
         return True

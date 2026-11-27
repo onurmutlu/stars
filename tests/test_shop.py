@@ -421,3 +421,47 @@ def test_products_json_edits_apply_without_restart(tmp_path, api, store, monkeyp
         path.write_text("{broken")
         os.utime(path, (time.time() + 10, time.time() + 10))
         assert [p["id"] for p in client.get("/api/products").json()] == ["a", "b"]
+
+
+
+# ------------------------------------------------------------------ CRM
+def test_customer_message_goes_to_admin_and_reply_comes_back(client, api, store):
+    update = text("Merhaba, kulüp ne zaman açılıyor?")
+    update["message"]["from"] |= {"first_name": "Ali", "username": "ali"}
+    hook(client, update)
+    to_admin = [m for m in api.of("sendMessage") if m["chat_id"] == ADMIN][-1]
+    assert "@ali" in to_admin["text"] and "kulüp ne zaman" in to_admin["text"]
+    assert "iletildi" in [m for m in api.of("sendMessage") if m["chat_id"] == BUYER][-1]["text"]
+    admin_message_id = store.db.execute("SELECT admin_message FROM inbox").fetchone()[0]
+    reply = {"update_id": 20, "message": {"message_id": 30, "chat": {"id": ADMIN, "type": "private"},
+             "from": {"id": ADMIN}, "text": "Pazartesi açılıyor!",
+             "reply_to_message": {"message_id": admin_message_id}}}
+    hook(client, reply)
+    assert {"chat_id": BUYER, "text": "Pazartesi açılıyor!"} in api.of("sendMessage")
+    assert "iletildi" in api.of("sendMessage")[-1]["text"]
+
+
+def test_contacts_track_source_and_stage(client, api, store):
+    hook(client, text("/start instagram"))
+    assert store.customers()[0]["source"] == "instagram" and store.customers()[0]["stage"] == "ziyaretçi"
+    order_id = order(client)
+    assert store.customers()[0]["stage"] == "sepette"
+    hook(client, paid(order_id, update_id=8))
+    assert store.customers()[0]["stage"] == "müşteri" and store.customers()[0]["spent"] == 50
+    hook(client, text("/start baska", update_id=9))
+    assert store.customers()[0]["source"] == "instagram"  # the first source is kept
+    hook(client, text("/musteriler", user_id=ADMIN, update_id=10))
+    assert "müşteri: 1" in api.of("sendMessage")[-1]["text"]
+
+
+def test_abandoned_cart_gets_one_reminder(client, api, store):
+    order_id = order(client)
+    shop = client.app.state.shop
+    created = store.order(order_id)["created"]
+    assert asyncio.run(shop.remind_carts(created + 600)) == 0      # too early
+    assert asyncio.run(shop.remind_carts(created + 3700)) == 1
+    reminder = api.of("sendMessage")[-1]
+    assert reminder["chat_id"] == BUYER and "yarım kaldı" in reminder["text"]
+    assert asyncio.run(shop.remind_carts(created + 7200)) == 0     # never twice
+    order(client)  # a new unpaid order for the same product: still no second reminder
+    assert asyncio.run(shop.remind_carts(time.time() + 3700)) == 0

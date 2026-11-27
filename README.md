@@ -123,6 +123,12 @@ python -m app.cli refund CHARGE_ID       # onay sorar; --yes ile sormaz
 
 Bot içinden admin (`ADMIN_IDS`): `/admin`, `/issues`, `/refund CHARGE_ID`.
 
+**Müşteri takibi (CRM):** Bota yazan ya da mağazayı açan herkes kaydedilir: ad, kullanıcı adı, ilk geldiği kaynak
+(`t.me/<bot>?start=instagram` → kaynak `instagram`) ve aşama (ziyaretçi → sepette → müşteri / abone / iade).
+Müşterinin bota yazdığı mesaj yöneticilere gelir; yönetici o mesajı yanıtlayınca cevap müşteriye bot üzerinden gider.
+`/musteriler` özet verir. Ödemeyi yarım bırakan alıcıya bir saat sonra bir kez hatırlatma gider (`CART_REMINDER=false`
+kapatır). Hub panelinde her mağazanın "Müşteriler" bölümü: aşama filtresi, not, bot üzerinden mesaj.
+
 Yöneticiler her satışta, abonelik yenilemesinde ve iadede bota mesaj alır (`NOTIFY_SALES=false` kapatır).
 Her sabah `DAILY_SUMMARY_HOUR` (varsayılan 9, sunucu saati; `-1` kapatır) son 24 saatin özetini gönderir:
 satış, ⭐ toplamı, yeni müşteri, yenileme, iade, aktif abonelik ve en çok satan ürün. Hiç hareket yoksa mesaj atmaz.

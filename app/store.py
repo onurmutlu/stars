@@ -44,6 +44,15 @@ CREATE TABLE IF NOT EXISTS state(key TEXT PRIMARY KEY, value INTEGER);
 CREATE TABLE IF NOT EXISTS channel_access(
     order_id TEXT PRIMARY KEY, user INTEGER NOT NULL, channel INTEGER NOT NULL, invite TEXT,
     created REAL NOT NULL, removed REAL, attempts INTEGER NOT NULL DEFAULT 0);
+-- everyone who talked to the bot or opened the shop: the CRM
+CREATE TABLE IF NOT EXISTS contacts(
+    user INTEGER PRIMARY KEY, name TEXT, username TEXT, first_seen REAL NOT NULL, last_seen REAL NOT NULL,
+    source TEXT, note TEXT);
+-- admin's copy of a customer message -> that customer, so a reply to it goes back to them
+CREATE TABLE IF NOT EXISTS inbox(
+    admin INTEGER NOT NULL, admin_message INTEGER NOT NULL, user INTEGER NOT NULL, created REAL NOT NULL,
+    PRIMARY KEY(admin, admin_message));
+CREATE TABLE IF NOT EXISTS cart_reminders(order_id TEXT PRIMARY KEY, sent REAL NOT NULL);
 -- channels and groups the bot was made admin of (from my_chat_member updates)
 CREATE TABLE IF NOT EXISTS channels(
     id INTEGER PRIMARY KEY, title TEXT, type TEXT, status TEXT, can_invite INTEGER, can_restrict INTEGER, updated REAL);
@@ -180,6 +189,86 @@ class Store:
 
     def channels(self):
         return self.db.execute("SELECT * FROM channels WHERE status='administrator' ORDER BY updated DESC").fetchall()
+
+    # contacts (CRM) ------------------------------------------------------------------
+    def touch_contact(self, user: dict, source: str | None = None, now: float | None = None) -> None:
+        """Record or refresh a person. The first source (deep link, campaign) is kept."""
+        if not user or not user.get("id"):
+            return
+        now = time.time() if now is None else now
+        name = " ".join(x for x in (user.get("first_name"), user.get("last_name")) if x)[:128] or None
+        username = (user.get("username") or None)
+        with self.db:
+            self.db.execute(
+                "INSERT INTO contacts(user,name,username,first_seen,last_seen,source) VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(user) DO UPDATE SET last_seen=excluded.last_seen, "
+                "name=COALESCE(excluded.name, contacts.name), username=COALESCE(excluded.username, contacts.username), "
+                "source=COALESCE(contacts.source, excluded.source)",
+                (int(user["id"]), name, username, now, now, (source or None) and source[:64]))
+
+    def set_note(self, user: int, note: str) -> bool:
+        with self.db:
+            cur = self.db.execute("UPDATE contacts SET note=? WHERE user=?", (note[:500] or None, user))
+        return cur.rowcount > 0
+
+    def customers(self, limit: int = 200, now: float | None = None) -> list[dict]:
+        """Contacts with their stage: ziyaretçi -> sepette -> müşteri (or abone / iade)."""
+        now = time.time() if now is None else now
+        live = "NOT EXISTS (SELECT 1 FROM refunds r WHERE r.charge=p.charge)"
+        rows = self.db.execute(
+            f"SELECT c.*, "
+            f"(SELECT COALESCE(SUM(p.stars),0) FROM payments p WHERE p.user=c.user AND {live}) AS spent, "
+            f"(SELECT COUNT(*) FROM payments p WHERE p.user=c.user AND {live}) AS payments, "
+            f"(SELECT COUNT(*) FROM payments p WHERE p.user=c.user AND NOT {live}) AS refunded, "
+            f"(SELECT COUNT(*) FROM payments p JOIN orders o ON o.id=p.order_id WHERE p.user=c.user AND {live} "
+            f" AND o.kind='subscription' AND p.expires>?) AS active_subs, "
+            f"(SELECT COUNT(*) FROM orders o WHERE o.user=c.user AND o.paid=0) AS open_orders "
+            f"FROM contacts c ORDER BY c.last_seen DESC LIMIT ?", (now, limit)).fetchall()
+        result = []
+        for r in rows:
+            if r["active_subs"]:
+                stage = "abone"
+            elif r["payments"]:
+                stage = "müşteri"
+            elif r["refunded"]:
+                stage = "iade"
+            elif r["open_orders"]:
+                stage = "sepette"
+            else:
+                stage = "ziyaretçi"
+            result.append({"user": r["user"], "name": r["name"], "username": r["username"], "stage": stage,
+                           "spent": r["spent"], "payments": r["payments"], "source": r["source"],
+                           "note": r["note"], "first_seen": r["first_seen"], "last_seen": r["last_seen"]})
+        return result
+
+    def funnel(self, now: float | None = None) -> dict[str, int]:
+        counts = {"ziyaretçi": 0, "sepette": 0, "müşteri": 0, "abone": 0, "iade": 0}
+        for c in self.customers(limit=100000, now=now):
+            counts[c["stage"]] += 1
+        return counts
+
+    def link_inbox(self, admin: int, admin_message: int, user: int) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO inbox VALUES(?,?,?,?)", (admin, admin_message, user, time.time()))
+
+    def inbox_user(self, admin: int, admin_message: int) -> int | None:
+        row = self.db.execute("SELECT user FROM inbox WHERE admin=? AND admin_message=?",
+                              (admin, admin_message)).fetchone()
+        return row["user"] if row else None
+
+    def abandoned_orders(self, now: float, min_age: float = 3600, max_age: float = 86400):
+        """Unpaid orders between one hour and a day old, not reminded, and not bought since."""
+        return self.db.execute(
+            "SELECT o.* FROM orders o WHERE o.paid=0 AND o.created<=? AND o.created>=? "
+            "AND NOT EXISTS (SELECT 1 FROM cart_reminders c WHERE c.order_id=o.id) "
+            "AND NOT EXISTS (SELECT 1 FROM orders x WHERE x.user=o.user AND x.product=o.product AND x.paid=1) "
+            "AND NOT EXISTS (SELECT 1 FROM cart_reminders c JOIN orders y ON y.id=c.order_id "
+            "                WHERE y.user=o.user AND y.product=o.product)",
+            (now - min_age, now - max_age)).fetchall()
+
+    def mark_reminded(self, order_id: str) -> None:
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO cart_reminders VALUES(?,?)", (order_id, time.time()))
 
     # reports -------------------------------------------------------------------------
     def summary(self, since: float, now: float) -> dict:
