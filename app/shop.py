@@ -11,6 +11,7 @@ Payment rules (https://core.telegram.org/bots/payments-stars):
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import re
@@ -27,6 +28,9 @@ Api = Callable[..., Awaitable]
 MAX_DELIVERY_ATTEMPTS = 5
 DELIVERY_RETRY_SECONDS = 300
 MAX_UPDATE_FAILURES = 3
+BROADCAST_GAP = 86400          # one announcement a day at most: keeps the bot out of spam reports
+BROADCAST_BATCH = 300          # messages per background tick (a tick is ~1 minute)
+BROADCAST_FOOTER = "\n\n— Duyuru almak istemiyorsan /durdur yaz."
 
 
 # message field -> (send method, its file parameter)
@@ -302,7 +306,8 @@ class StarsShop:
 
     async def tick(self, now: float | None = None) -> None:
         """Background work, once a minute: deliveries, channel removals, daily summary."""
-        for job in (self.redeliver, self.sweep_channels, self.daily_summary, self.remind_carts, self.notify_expired):
+        for job in (self.redeliver, self.sweep_channels, self.daily_summary, self.remind_carts, self.notify_expired,
+                    self.send_broadcasts):
             try:
                 await job(now)
             except Exception as exc:  # noqa: BLE001 - one job must not stop the others
@@ -498,6 +503,63 @@ class StarsShop:
                 log.info("Süre bitti bildirimi gönderilemedi: %s", type(exc).__name__)
         return sent
 
+    # ------------------------------------------------------------------ announcements
+    def broadcast_state(self, now: float | None = None) -> dict:
+        now = time.time() if now is None else now
+        last = self.store.last_broadcast()
+        next_allowed = (last["confirmed"] + BROADCAST_GAP) if last else None
+        return {"audience": len(self.store.audience(self.settings.admin_ids)),
+                "next_allowed": next_allowed if next_allowed and next_allowed > now else None,
+                "history": self.store.broadcasts()}
+
+    def _check_broadcast(self, text: str, now: float) -> None:
+        if not text or len(text) > 3500:
+            raise ShopError("Duyuru metni 1–3500 karakter olmalı.")
+        if self.store.sending_broadcast():
+            raise ShopError("Önceki duyuru hâlâ gönderiliyor.")
+        state = self.broadcast_state(now)
+        if state["next_allowed"]:
+            hours = max(1, round((state["next_allowed"] - now) / 3600))
+            raise ShopError(f"Günde en fazla bir duyuru gönderilebilir. Yaklaşık {hours} saat sonra tekrar dene.")
+        if not state["audience"]:
+            raise ShopError("Duyuru gidecek kimse yok: henüz kimse botunla konuşmadı (ya da hepsi /durdur dedi).")
+
+    def start_broadcast(self, text: str, now: float | None = None) -> int:
+        """Queue an announcement right away (the panel asks for confirmation itself)."""
+        now = time.time() if now is None else now
+        text = (text or "").strip()
+        self._check_broadcast(text, now)
+        broadcast_id = self.store.create_broadcast(text)
+        return self.store.confirm_broadcast(broadcast_id, self.store.audience(self.settings.admin_ids))
+
+    async def send_broadcasts(self, now: float | None = None) -> int:
+        current = self.store.sending_broadcast()
+        if not current:
+            return 0
+        sent = 0
+        for user in self.store.broadcast_batch(current["id"], BROADCAST_BATCH):
+            try:
+                await self.api("sendMessage", chat_id=user, text=current["text"] + BROADCAST_FOOTER)
+            except TelegramError as exc:
+                if exc.retry_after:
+                    return sent  # Telegram asked us to slow down: continue next tick
+                if exc.code == 403:
+                    self.store.mark_blocked(user)
+                self.store.broadcast_result(current["id"], user, False)
+                continue
+            except Exception:  # noqa: BLE001
+                self.store.broadcast_result(current["id"], user, False)
+                continue
+            self.store.broadcast_result(current["id"], user, True)
+            sent += 1
+            await asyncio.sleep(0.04)  # ~25 messages a second, under Telegram's limit
+        if not self.store.broadcast_batch(current["id"], 1):
+            self.store.finish_broadcast(current["id"])
+            done = self.store.db.execute("SELECT * FROM broadcasts WHERE id=?", (current["id"],)).fetchone()
+            await self.notify_admins(f"📣 Duyuru tamamlandı: {done['sent']} kişiye ulaştı"
+                                     + (f", {done['failed']} kişiye ulaşmadı (botu engellemiş)." if done["failed"] else "."))
+        return sent
+
     async def remind_carts(self, now: float | None = None) -> int:
         """One gentle reminder for an order left unpaid for an hour (never twice for the same product)."""
         if not self.settings.cart_reminder or not self.settings.sales_enabled:
@@ -597,6 +659,37 @@ class StarsShop:
             rows = self.store.open_issues()
             reply = "\n".join(f"{r['reason']} · user={r['user']} · {r['stars']}⭐ · {r['charge']}" for r in rows[:30]) \
                 or "Açık ödeme sorunu yok."
+        elif command in ("/durdur", "/stop"):
+            self.store.set_opt_out(user, True)
+            reply = "Tamam, artık duyuru almayacaksın. Siparişlerin ve destek mesajların etkilenmez. Tekrar açmak için /baslat."
+        elif command in ("/baslat", "/resume"):
+            self.store.set_opt_out(user, False)
+            reply = "Duyurular tekrar açık."
+        elif command == "/duyuru" and user in self.settings.admin_ids:
+            try:
+                self._check_broadcast(argument, time.time())
+            except ShopError as exc:
+                reply = str(exc) if argument else ("Kullanım: /duyuru <metin>\nBotunla konuşmuş herkese gider; "
+                                                   "günde en fazla bir duyuru. Önce önizleme gösterilir.")
+            else:
+                self.store.create_broadcast(argument)
+                count = len(self.store.audience(self.settings.admin_ids))
+                await self.api("sendMessage", chat_id=user, text=argument + BROADCAST_FOOTER)
+                reply = (f"↑ Önizleme. {count} kişiye gidecek.\nGöndermek için /duyuru_onay, vazgeçmek için /duyuru_iptal.")
+        elif command == "/duyuru_onay" and user in self.settings.admin_ids:
+            pending = self.store.pending_broadcast()
+            if not pending:
+                reply = "Onay bekleyen duyuru yok. Önce /duyuru <metin> yaz."
+            else:
+                try:
+                    self._check_broadcast(pending["text"], time.time())
+                except ShopError as exc:
+                    reply = str(exc)
+                else:
+                    count = self.store.confirm_broadcast(pending["id"], self.store.audience(self.settings.admin_ids))
+                    reply = f"📣 {count} kişiye gönderiliyor. Bitince haber vereceğim."
+        elif command == "/duyuru_iptal" and user in self.settings.admin_ids:
+            reply = "Duyuru iptal edildi." if self.store.cancel_broadcast() else "İptal edilecek duyuru yok."
         elif command in ("/kod", "/code") and user in self.settings.admin_ids:
             reply = self._promo_command(argument)
         elif command == "/start" and argument.lower().startswith("kod_"):

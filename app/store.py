@@ -54,6 +54,14 @@ CREATE TABLE IF NOT EXISTS inbox(
     PRIMARY KEY(admin, admin_message));
 CREATE TABLE IF NOT EXISTS cart_reminders(order_id TEXT PRIMARY KEY, sent REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS expiry_notices(order_id TEXT PRIMARY KEY, sent REAL NOT NULL);
+-- announcements to people who talked to the bot; one per day at most, opt-out with /durdur
+CREATE TABLE IF NOT EXISTS broadcasts(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL,
+    confirmed REAL, finished REAL, total INTEGER NOT NULL DEFAULT 0, sent INTEGER NOT NULL DEFAULT 0,
+    failed INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS broadcast_queue(
+    broadcast INTEGER NOT NULL, user INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'queued',
+    PRIMARY KEY(broadcast, user));
 -- discount codes; uses count paid orders only
 CREATE TABLE IF NOT EXISTS promo_codes(
     code TEXT PRIMARY KEY, percent INTEGER NOT NULL, product TEXT, max_uses INTEGER, uses INTEGER NOT NULL DEFAULT 0,
@@ -81,6 +89,10 @@ class Store:
         for column, kind in (("channel", "INTEGER"), ("access_days", "INTEGER"), ("promo", "TEXT")):
             if column not in columns:  # databases from before these fields
                 self.db.execute(f"ALTER TABLE orders ADD COLUMN {column} {kind}")
+        contact_columns = {row[1] for row in self.db.execute("PRAGMA table_info(contacts)")}
+        for column in ("opted_out", "blocked"):
+            if column not in contact_columns:
+                self.db.execute(f"ALTER TABLE contacts ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0")
         self.db.commit()
 
     # orders -----------------------------------------------------------------
@@ -201,6 +213,65 @@ class Store:
 
     def channels(self):
         return self.db.execute("SELECT * FROM channels WHERE status='administrator' ORDER BY updated DESC").fetchall()
+
+    # broadcasts ----------------------------------------------------------------------
+    def audience(self, exclude: frozenset[int] = frozenset()) -> list[int]:
+        rows = self.db.execute("SELECT user FROM contacts WHERE opted_out=0 AND blocked=0").fetchall()
+        return [r["user"] for r in rows if r["user"] not in exclude]
+
+    def set_opt_out(self, user: int, opted_out: bool) -> None:
+        with self.db:
+            self.db.execute("UPDATE contacts SET opted_out=? WHERE user=?", (int(opted_out), user))
+
+    def mark_blocked(self, user: int) -> None:
+        with self.db:
+            self.db.execute("UPDATE contacts SET blocked=1 WHERE user=?", (user,))
+
+    def last_broadcast(self):
+        return self.db.execute("SELECT * FROM broadcasts WHERE confirmed IS NOT NULL ORDER BY confirmed DESC LIMIT 1").fetchone()
+
+    def pending_broadcast(self):
+        return self.db.execute("SELECT * FROM broadcasts WHERE status='pending' ORDER BY id DESC LIMIT 1").fetchone()
+
+    def create_broadcast(self, text: str) -> int:
+        with self.db:
+            self.db.execute("UPDATE broadcasts SET status='cancelled' WHERE status='pending'")
+            return self.db.execute("INSERT INTO broadcasts(text,status,created) VALUES(?,?,?)",
+                                   (text, "pending", time.time())).lastrowid
+
+    def cancel_broadcast(self) -> bool:
+        with self.db:
+            return self.db.execute("UPDATE broadcasts SET status='cancelled' WHERE status='pending'").rowcount > 0
+
+    def confirm_broadcast(self, broadcast_id: int, audience: list[int]) -> int:
+        with self.db:
+            self.db.executemany("INSERT OR IGNORE INTO broadcast_queue(broadcast,user) VALUES(?,?)",
+                                [(broadcast_id, u) for u in audience])
+            self.db.execute("UPDATE broadcasts SET status='sending', confirmed=?, total=? WHERE id=?",
+                            (time.time(), len(audience), broadcast_id))
+        return len(audience)
+
+    def sending_broadcast(self):
+        return self.db.execute("SELECT * FROM broadcasts WHERE status='sending' ORDER BY id LIMIT 1").fetchone()
+
+    def broadcast_batch(self, broadcast_id: int, limit: int) -> list[int]:
+        return [r["user"] for r in self.db.execute(
+            "SELECT user FROM broadcast_queue WHERE broadcast=? AND state='queued' LIMIT ?", (broadcast_id, limit))]
+
+    def broadcast_result(self, broadcast_id: int, user: int, ok: bool) -> None:
+        with self.db:
+            self.db.execute("UPDATE broadcast_queue SET state=? WHERE broadcast=? AND user=?",
+                            ("sent" if ok else "failed", broadcast_id, user))
+            self.db.execute(f"UPDATE broadcasts SET {'sent' if ok else 'failed'}={'sent' if ok else 'failed'}+1 WHERE id=?",
+                            (broadcast_id,))
+
+    def finish_broadcast(self, broadcast_id: int) -> None:
+        with self.db:
+            self.db.execute("UPDATE broadcasts SET status='done', finished=? WHERE id=?", (time.time(), broadcast_id))
+
+    def broadcasts(self, limit: int = 10) -> list[dict]:
+        return [dict(r) for r in self.db.execute("SELECT * FROM broadcasts WHERE status!='cancelled' "
+                                                 "ORDER BY id DESC LIMIT ?", (limit,))]
 
     # promo codes ---------------------------------------------------------------------
     def save_promo(self, code: str, percent: int, product: str | None = None, max_uses: int | None = None,

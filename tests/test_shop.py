@@ -589,3 +589,45 @@ def test_campaign_link_opens_the_shop_with_the_code(client, api, store):
 def test_only_admins_manage_codes(client, api, store):
     hook(client, text("/kod HACK 90"))
     assert store.promo("HACK") is None
+
+
+# ------------------------------------------------------------------ announcements
+def test_broadcast_preview_confirm_send_opt_out_and_daily_limit(client, api, store):
+    from app.telegram import TelegramError
+    shop = client.app.state.shop
+    for uid, uname in ((BUYER, "a"), (OTHER, "b"), (3003, "c")):
+        hook(client, text("/start", user_id=uid, update_id=uid))
+    hook(client, text("/durdur", user_id=OTHER, update_id=50))
+    assert "artık duyuru almayacaksın" in api.of("sendMessage")[-1]["text"]
+    hook(client, text("/duyuru Yeni deneme paketi çıktı!", user_id=ADMIN, update_id=51))
+    preview, info = api.of("sendMessage")[-2:]
+    assert preview["chat_id"] == ADMIN and "/durdur" in preview["text"] and "2 kişiye" in info["text"]
+    hook(client, text("/duyuru_onay", user_id=ADMIN, update_id=52))
+    assert "2 kişiye gönderiliyor" in api.of("sendMessage")[-1]["text"]
+
+    real = api.__call__
+
+    async def blocked_for_3003(method, **payload):
+        if method == "sendMessage" and payload.get("chat_id") == 3003:
+            raise TelegramError(method, 403, "Forbidden: bot was blocked by the user")
+        return await real(method, **payload)
+    shop.api = blocked_for_3003
+    assert asyncio.run(shop.send_broadcasts()) == 1
+    shop.api = api
+    received = [m["chat_id"] for m in api.of("sendMessage") if m["text"].startswith("Yeni deneme paketi")]
+    assert received == [ADMIN, BUYER]  # the preview to the admin, then the one customer who can receive it
+    assert "1 kişiye ulaştı" in api.of("sendMessage")[-1]["text"]
+    assert store.db.execute("SELECT blocked FROM contacts WHERE user=3003").fetchone()[0] == 1
+    # one announcement a day
+    hook(client, text("/duyuru İkinci", user_id=ADMIN, update_id=53))
+    assert "Günde en fazla bir duyuru" in api.of("sendMessage")[-1]["text"]
+    assert shop.broadcast_state(time.time() + 86401)["next_allowed"] is None
+
+
+def test_customers_cannot_broadcast_and_cancel_works(client, api, store):
+    hook(client, text("/start", update_id=60))
+    hook(client, text("/duyuru spam", update_id=61))
+    assert store.pending_broadcast() is None
+    hook(client, text("/duyuru Merhaba", user_id=ADMIN, update_id=62))
+    hook(client, text("/duyuru_iptal", user_id=ADMIN, update_id=63))
+    assert store.pending_broadcast() is None and "iptal" in api.of("sendMessage")[-1]["text"]

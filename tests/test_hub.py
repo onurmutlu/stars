@@ -503,3 +503,18 @@ def test_panel_promo_codes_per_shop(hub_client, world):
     quote = hub_client.get(f"/s/{shop['username']}/api/quote", params={"product_id": "guide", "code": "ILK10"}).json()
     assert quote["stars"] == 45 and quote["original"] == 50
     assert hub_client.delete(f"{url}/ILK10", headers=panel()).json()["promos"][0]["active"] == 0
+
+
+def test_panel_broadcast_goes_to_shop_contacts_once_a_day(hub_client, world):
+    shop = ready_shop(hub_client)
+    url = f"/panel/api/shops/{shop['id']}/broadcast"
+    assert "kimse yok" in hub_client.post(url, headers=panel(), json={"text": "Merhaba"}).json()["detail"]
+    tenant_hook(hub_client, shop["id"], {"update_id": 70, "message": {"message_id": 1, "chat": {"id": BUYER, "type": "private"},
+                                                                      "from": {"id": BUYER}, "text": "/start"}})
+    r = hub_client.post(url, headers=panel(), json={"text": "Yeni ürün!"})
+    assert r.status_code == 200 and r.json()["queued"] == 1
+    assert hub_client.post(url, headers=panel(), json={"text": "Bir daha"}).status_code == 400
+    assert hub_client.get(url, headers=panel(SELLER2)).status_code == 404
+    import asyncio
+    asyncio.run(hub_client.hub.shop(hub_client.hub.registry.tenant(shop["id"])).send_broadcasts())
+    assert any(m["chat_id"] == BUYER and m["text"].startswith("Yeni ürün!") for m in world.bots[TOKEN_A].of("sendMessage"))

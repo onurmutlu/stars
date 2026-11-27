@@ -63,9 +63,10 @@ HUB_COMMANDS = [
     {"command": "terms", "description": "Koşullar"},
 ]
 # In forward mode these commands stay with the shop; everything else goes to the bot's own backend.
-FORWARD_MODE_SHOP_COMMANDS = {"/magaza", "/shop", "/orders", "/paysupport", "/terms"}
+FORWARD_MODE_SHOP_COMMANDS = {"/magaza", "/shop", "/orders", "/paysupport", "/terms", "/durdur", "/baslat"}
 # owner commands a forwarded bot still sends to the shop
-OWNER_SHOP_COMMANDS = {"/issues", "/dosya", "/musteriler", "/admin", "/yonetim", "/kod"}
+OWNER_SHOP_COMMANDS = {"/issues", "/dosya", "/musteriler", "/admin", "/yonetim", "/kod", "/duyuru", "/duyuru_onay",
+                       "/duyuru_iptal"}
 PRO_ID = "pro"
 
 ApiFactory = Callable[[str], Callable[..., Awaitable]]
@@ -401,6 +402,10 @@ class ShopPatch(BaseModel):
     forward_secret: str | None = Field(None, max_length=256)
 
 
+class BroadcastRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=3500)
+
+
 class PromoRequest(BaseModel):
     code: str = Field(min_length=3, max_length=24)
     percent: int = Field(ge=1, le=90)
@@ -711,6 +716,18 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         if not hub.store_for(tenant["id"]).set_note(user, body.note.strip()):
             raise ShopError("Müşteri bulunamadı.", 404)
         return {"ok": True}
+
+    @app.get("/panel/api/shops/{tenant_id}/broadcast")
+    async def panel_broadcast_state(tenant_id: str, x_telegram_init_data: str | None = Header(None)):
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        return hub.shop(tenant).broadcast_state()
+
+    @app.post("/panel/api/shops/{tenant_id}/broadcast")
+    async def panel_broadcast(tenant_id: str, body: BroadcastRequest, x_telegram_init_data: str | None = Header(None)):
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        shop = hub.shop(tenant)
+        queued = shop.start_broadcast(body.text)
+        return {"queued": queued} | shop.broadcast_state()
 
     @app.get("/panel/api/shops/{tenant_id}/promos")
     async def panel_promos(tenant_id: str, x_telegram_init_data: str | None = Header(None)):
