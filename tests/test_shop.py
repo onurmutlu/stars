@@ -295,3 +295,110 @@ def test_admin_command_lists_admin_links_only_for_admins(api, store):
 def test_mini_app_assets_are_cache_busted(client):
     html = client.get("/app").text
     assert '/static/app.js?v=' in html and '/static/style.css?v=' in html
+
+
+
+# ------------------------------------------------------------------ channel access, notifications, summary
+def channel_client(api, store, **overrides):
+    from fastapi.testclient import TestClient
+    from app.config import Product
+    from app.main import create_app
+    from tests.conftest import make_settings
+    products = {"vip": Product("vip", "VIP", "Kanal", 100, "Hoş geldin", kind="subscription", channel_id=-1005),
+                "arsiv": Product("arsiv", "Arşiv", "Kalıcı", 40, "Arşiv", channel_id=-1006)}
+    return TestClient(create_app(make_settings(**overrides), products, store, api, background=False))
+
+
+def test_channel_subscription_invite_removal_and_renewal(api, store):
+    with channel_client(api, store) as client:
+        order_id = order(client, "vip")
+        now = int(time.time())
+        hook(client, paid(order_id, amount=100, charge="c1", subscription_expiration_date=now + 100))
+        (invite,) = api.of("createChatInviteLink")
+        assert invite["chat_id"] == -1005 and invite["member_limit"] == 1
+        assert "https://t.me/+inv0" in api.of("sendMessage")[-1]["text"]
+        view = client.get(f"/api/orders/{order_id}", headers=headers()).json()
+        assert "https://t.me/+inv0" in view["content"]
+        # still active: nobody is removed
+        asyncio.run(client.app.state.shop.sweep_channels(now))
+        assert not api.of("banChatMember")
+        # expired: removed from the channel (ban + unban = kick) and told how to come back
+        asyncio.run(client.app.state.shop.sweep_channels(now + 200))
+        assert api.of("banChatMember")[0] == {"chat_id": -1005, "user_id": BUYER, "until_date": now + 260}
+        assert api.of("unbanChatMember")[0]["only_if_banned"] is True
+        assert "sona erdi" in api.of("sendMessage")[-1]["text"]
+        asyncio.run(client.app.state.shop.sweep_channels(now + 300))
+        assert len(api.of("banChatMember")) == 1
+        # renewal after removal: a fresh invite
+        hook(client, paid(order_id, amount=100, charge="c2", update_id=7, is_recurring=True,
+                          subscription_expiration_date=int(time.time()) + 2592000))
+        assert len(api.of("createChatInviteLink")) == 2 and "+inv1" in api.of("sendMessage")[-1]["text"]
+
+
+def test_refunded_channel_purchase_loses_access(api, store):
+    with channel_client(api, store) as client:
+        order_id = order(client, "arsiv")
+        hook(client, paid(order_id, amount=40, charge="c9"))
+        asyncio.run(client.app.state.shop.sweep_channels())
+        assert not api.of("banChatMember")
+        store.mark_refunded("c9")
+        asyncio.run(client.app.state.shop.sweep_channels())
+        assert api.of("banChatMember")[0]["chat_id"] == -1006
+
+
+def test_invite_failure_warns_admin_once_and_retries(api, store):
+    with channel_client(api, store) as client:
+        api.fail["createChatInviteLink"] = 2
+        order_id = order(client, "arsiv")
+        hook(client, paid(order_id, amount=40, charge="c3"))
+        warnings = [m for m in api.of("sendMessage") if m["chat_id"] == ADMIN]
+        assert len(warnings) == 1 and "yönetici" in warnings[0]["text"]
+        asyncio.run(client.app.state.shop.redeliver(time.time() + 400))
+        asyncio.run(client.app.state.shop.redeliver(time.time() + 800))
+        assert "+inv" in api.of("sendMessage")[-1]["text"]
+        assert len([m for m in api.of("sendMessage") if m["chat_id"] == ADMIN]) == 1
+
+
+def test_sale_and_renewal_notifications(api, store):
+    with channel_client(api, store, notify_sales=True) as client:
+        order_id = order(client, "vip")
+        update = paid(order_id, amount=100, charge="n1", subscription_expiration_date=int(time.time()) + 999)
+        update["message"]["from"] |= {"first_name": "Ayşe", "username": "ayse"}
+        hook(client, update)
+        notice = [m for m in api.of("sendMessage") if m["chat_id"] == ADMIN][-1]["text"]
+        assert notice.startswith("💰 Yeni satış: VIP · ⭐100") and "@ayse" in notice
+        hook(client, paid(order_id, amount=100, charge="n2", update_id=8, is_recurring=True,
+                          subscription_expiration_date=int(time.time()) + 2592000))
+        assert [m for m in api.of("sendMessage") if m["chat_id"] == ADMIN][-1]["text"].startswith("🔁")
+
+
+def test_bot_added_to_channel_tells_admin_the_id(api, store):
+    with channel_client(api, store) as client:
+        hook(client, {"update_id": 40, "my_chat_member": {
+            "chat": {"id": -100777, "type": "channel", "title": "VIP Kanal"}, "from": {"id": ADMIN},
+            "new_chat_member": {"status": "administrator", "can_invite_users": True, "can_restrict_members": False}}})
+        notice = api.of("sendMessage")[-1]
+        assert notice["chat_id"] == ADMIN and "-100777" in notice["text"] and "Üyeleri yasakla" in notice["text"]
+        assert store.channels()[0]["id"] == -100777
+
+
+def test_daily_summary_once_a_day_and_only_with_activity(api, store):
+    at = time.time() + 3600
+    hour = time.localtime(at).tm_hour
+    with channel_client(api, store, summary_hour=hour) as client:
+        shop = client.app.state.shop
+        order_id = order(client, "arsiv")
+        hook(client, paid(order_id, amount=40, charge="d1"))
+        if hour > 0:
+            before = time.mktime(time.localtime(at)[:3] + (hour - 1, 30, 0, 0, 0, -1))
+            assert asyncio.run(shop.daily_summary(before)) is False  # before the summary hour
+        assert asyncio.run(shop.daily_summary(at)) is True
+        text = api.of("sendMessage")[-1]["text"]
+        assert "Satış: 1 · ⭐40" in text and "Arşiv" in text
+        assert asyncio.run(shop.daily_summary(at + 60)) is False  # once a day
+
+
+def test_daily_summary_is_silent_without_activity(api, store):
+    with channel_client(api, store, summary_hour=0) as client:
+        assert asyncio.run(client.app.state.shop.daily_summary()) is False
+        assert not api.of("sendMessage")

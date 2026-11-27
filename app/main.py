@@ -39,7 +39,7 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
     async def redeliver_loop():
         while True:
             try:
-                await shop.redeliver()
+                await shop.tick()
             except Exception as exc:  # noqa: BLE001
                 log.error("Yeniden teslim döngüsü hatası: %s", type(exc).__name__)
             await asyncio.sleep(60)

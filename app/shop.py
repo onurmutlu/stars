@@ -11,12 +11,14 @@ Payment rules (https://core.telegram.org/bots/payments-stars):
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from typing import Awaitable, Callable
 
 from .config import SUBSCRIPTION_PERIOD, Product, Settings
 from .store import Store
+from .telegram import TelegramError
 
 log = logging.getLogger("stars_shop")
 Api = Callable[..., Awaitable]
@@ -24,6 +26,12 @@ Api = Callable[..., Awaitable]
 MAX_DELIVERY_ATTEMPTS = 5
 DELIVERY_RETRY_SECONDS = 300
 MAX_UPDATE_FAILURES = 3
+
+
+def _who(user: dict) -> str:
+    name = " ".join(x for x in (user.get("first_name"), user.get("last_name")) if x)
+    handle = f"@{user['username']}" if user.get("username") else ""
+    return " ".join(x for x in (name, handle, f"(id {user.get('id')})") if x)
 
 
 class ShopError(Exception):
@@ -80,6 +88,9 @@ class StarsShop:
         if self.store.has_access(order):
             view["status"] = "paid"
             view["content"] = order["content"]
+            access = self.store.channel_access(order["id"]) if order["channel"] else None
+            if access and access["invite"] and access["removed"] is None:
+                view["content"] += f"\n\n👉 Katılma linkin (tek kullanımlık): {access['invite']}"
             view["access_until"] = self.store.access_until(order)
         elif order["paid"]:
             view["status"] = "expired" if order["kind"] == "subscription" and self.store.live_payments(order["id"]) else "refunded"
@@ -96,10 +107,21 @@ class StarsShop:
         if order["delivered"] or not self.store.has_access(order):
             return
         text = f"✅ {order['title']}\n\n{order['content']}"
+        if order["channel"]:
+            invite = await self._invite(order)
+            text += f"\n\n👉 Katılma linkin (sadece senin için, tek kullanımlık):\n{invite}"
         await self.api("sendMessage", chat_id=order["user"],
                        text=text if len(text) <= 4096 else order["content"], protect_content=True)
         with self.store.db:
             self.store.db.execute("UPDATE orders SET delivered=1 WHERE id=?", (order["id"],))
+
+    async def _invite(self, order) -> str:
+        """A one-person invite to the product's channel. The bot must be an admin there."""
+        link = await self.api("createChatInviteLink", chat_id=order["channel"], member_limit=1,
+                              expire_date=int(time.time()) + 7 * 86400, name=f"Sipariş {order['id'][:8]}")
+        invite = link["invite_link"] if isinstance(link, dict) else str(link)
+        self.store.save_invite(order, invite)
+        return invite
 
     async def try_deliver(self, order) -> None:
         """A buyer who blocked the bot must not stall the update queue.
@@ -116,6 +138,13 @@ class StarsShop:
                     (order["id"], time.time()),
                 )
             log.warning("Teslimat başarısız: order=%s hata=%s", order["id"], type(exc).__name__)
+            first = self.store.db.execute("SELECT attempts FROM delivery_state WHERE order_id=?",
+                                          (order["id"],)).fetchone()["attempts"] == 1
+            if order["channel"] and first and not self.store.channel_access(order["id"]):
+                await self.notify_admins(
+                    f"⚠️ '{order['title']}' için kanal davet linki oluşturulamadı (kanal {order['channel']}).\n"
+                    "Botun kanalda yönetici olduğundan ve 'Kullanıcı davet et' + 'Üyeleri yasakla' yetkilerinin "
+                    "açık olduğundan emin ol. Teslimat her 5 dakikada yeniden denenecek.")
 
     async def redeliver(self, now: float | None = None) -> None:
         now = time.time() if now is None else now
@@ -137,6 +166,95 @@ class StarsShop:
                 log.error("Teslimat %s denemede başarısız, operatör gerekli: order=%s",
                           MAX_DELIVERY_ATTEMPTS, order["id"])
 
+    # ------------------------------------------------------------------ admins
+    async def notify_admins(self, text: str) -> None:
+        for admin in self.settings.admin_ids:
+            try:
+                await self.api("sendMessage", chat_id=admin, text=text, disable_web_page_preview=True)
+            except Exception as exc:  # noqa: BLE001 - a notice must never break a payment
+                log.warning("Yönetici bildirimi gönderilemedi: %s", type(exc).__name__)
+
+    async def _membership(self, event: dict) -> None:
+        """The bot was added to (or removed from) a channel or group: tell the admins its ID."""
+        chat = event.get("chat") or {}
+        if chat.get("type") not in ("channel", "supergroup", "group"):
+            return
+        member = event.get("new_chat_member") or {}
+        status = member.get("status", "")
+        can_invite = bool(member.get("can_invite_users"))
+        can_restrict = bool(member.get("can_restrict_members")) or chat.get("type") == "channel"
+        self.store.save_channel(chat, status, can_invite, can_restrict)
+        title = chat.get("title") or chat["id"]
+        if status == "administrator":
+            missing = [name for ok, name in ((can_invite, "Kullanıcı davet et"),
+                                             (bool(member.get("can_restrict_members")), "Üyeleri yasakla")) if not ok]
+            note = ("\n⚠️ Eksik yetki: " + ", ".join(missing) + ". Bunlar olmadan link verilemez / süresi biten çıkarılamaz.") \
+                if missing else "\nYetkiler tamam."
+            await self.notify_admins(f"✅ Bot '{title}' için yönetici oldu.\nKanal ID: {chat['id']}\n"
+                                     f"Bu kanala erişim satmak için ürünün 'Kanal ID' alanına bu sayıyı yaz.{note}")
+        elif status in ("left", "kicked", "member", "restricted"):
+            await self.notify_admins(f"⚠️ Bot '{title}' içinde artık yönetici değil ({chat['id']}). "
+                                     "Bu kanala bağlı ürünlerde davet ve çıkarma çalışmaz.")
+
+    async def sweep_channels(self, now: float | None = None) -> None:
+        """Take channel access back from expired subscriptions and refunded orders."""
+        now = time.time() if now is None else now
+        for row in self.store.active_channel_access():
+            order = self.store.order(row["order_id"])
+            if order and self.store.has_access(order, now):
+                continue
+            try:
+                with contextlib.suppress(TelegramError):  # an unused invite is simply revoked
+                    if row["invite"]:
+                        await self.api("revokeChatInviteLink", chat_id=row["channel"], invite_link=row["invite"])
+                await self.api("banChatMember", chat_id=row["channel"], user_id=row["user"], until_date=int(now) + 60)
+                await self.api("unbanChatMember", chat_id=row["channel"], user_id=row["user"], only_if_banned=True)
+            except Exception as exc:  # noqa: BLE001
+                attempts = self.store.removal_failed(row["order_id"])
+                log.warning("Kanaldan çıkarma başarısız: order=%s hata=%s", row["order_id"], type(exc).__name__)
+                if attempts >= 5:
+                    self.store.mark_removed(row["order_id"])
+                    await self.notify_admins(f"⚠️ {row['user']} kullanıcısı {row['channel']} kanalından çıkarılamadı "
+                                             f"(erişimi bitti). Elle çıkar ya da botun yetkilerini kontrol et.")
+                continue
+            self.store.mark_removed(row["order_id"])
+            with contextlib.suppress(Exception):
+                title = order["title"] if order else "Üyelik"
+                await self.api("sendMessage", chat_id=row["user"],
+                               text=f"'{title}' erişimin sona erdi. Yeniden katılmak için mağazadan tekrar satın alabilirsin.",
+                               reply_markup={"inline_keyboard": [[{"text": "🛍 Mağazayı aç",
+                                                                   "web_app": {"url": self.settings.webapp_url + "/app"}}]]})
+
+    async def daily_summary(self, now: float | None = None) -> bool:
+        """Once a day after SUMMARY hour (server local time): yesterday's sales to the admins."""
+        now = time.time() if now is None else now
+        if self.settings.summary_hour < 0 or not self.settings.admin_ids:
+            return False
+        local = time.localtime(now)
+        today = int(time.strftime("%Y%m%d", local))
+        if local.tm_hour < self.settings.summary_hour or self.store.get_state("summary_day") >= today:
+            return False
+        self.store.set_state("summary_day", today)
+        report = self.store.summary(now - 86400, now)
+        if not (report["sales"] or report["refunds"] or report["active_subscriptions"]):
+            return False  # nothing to say: no message
+        lines = [f"📊 {self.settings.shop_name} · son 24 saat",
+                 f"Satış: {report['sales']} · ⭐{report['stars']}",
+                 f"Yeni müşteri: {report['new_buyers']} · Yenileme: {report['renewals']} · İade: {report['refunds']}",
+                 f"Aktif abonelik: {report['active_subscriptions']}"]
+        if report["top"]:
+            lines.append(f"En çok satan: {report['top']}")
+        await self.notify_admins("\n".join(lines))
+        return True
+
+    async def tick(self, now: float | None = None) -> None:
+        """Background work, once a minute: deliveries, channel removals, daily summary."""
+        for job in (self.redeliver, self.sweep_channels, self.daily_summary):
+            try:
+                await job(now)
+            except Exception as exc:  # noqa: BLE001 - one job must not stop the others
+                log.error("Arka plan işi %s hatası: %s", job.__name__, type(exc).__name__)
+
     # ------------------------------------------------------------------ refunds
     async def refund(self, charge: str) -> bool:
         """Refund by charge id. Returns False if it was already refunded."""
@@ -156,15 +274,22 @@ class StarsShop:
         if query:
             await self._pre_checkout(query)
             return
+        if update.get("my_chat_member"):
+            await self._membership(update["my_chat_member"])
+            return
         message = update.get("message") or {}
         sender = message.get("from") or {}
         if message.get("chat", {}).get("type") != "private" or sender.get("is_bot"):
             return
         if message.get("successful_payment"):
-            await self._successful_payment(sender["id"], message["successful_payment"])
+            await self._successful_payment(sender["id"], message["successful_payment"], sender)
         elif message.get("refunded_payment"):
             # Refunds made outside this bot (e.g. by Telegram support) revoke access too.
-            self.store.mark_refunded(message["refunded_payment"]["telegram_payment_charge_id"])
+            refunded = message["refunded_payment"]
+            first = not self.store.is_refunded(refunded["telegram_payment_charge_id"])
+            self.store.mark_refunded(refunded["telegram_payment_charge_id"])
+            if first and self.settings.notify_sales:
+                await self.notify_admins(f"↩️ İade: ⭐{refunded.get('total_amount', '?')} · {_who(sender)}")
         elif message.get("text"):
             await self._command(sender["id"], message["text"])
 
@@ -182,7 +307,7 @@ class StarsShop:
         extra = {} if ok else {"error_message": "Sipariş geçersiz ya da süresi doldu. Mağazayı yeniden açıp tekrar dene."}
         await self.api("answerPreCheckoutQuery", pre_checkout_query_id=query["id"], ok=ok, **extra)
 
-    async def _successful_payment(self, user: int, payment: dict) -> None:
+    async def _successful_payment(self, user: int, payment: dict, sender: dict | None = None) -> None:
         charge = payment["telegram_payment_charge_id"]
         if self.store.payment(charge):
             return  # duplicate update
@@ -204,8 +329,16 @@ class StarsShop:
             issue("order_already_paid")  # a second charge for a one-time order: refund it
             log.error("Tek seferlik sipariş ikinci kez ödendi: order=%s charge=%s", order["id"], charge)
             return
+        renewal = bool(self.store.live_payments(order["id"]))
         self.store.add_payment(charge, order, expires, bool(payment.get("is_recurring")))
+        if order["channel"]:
+            self.store.reopen_channel(order["id"])
         await self.try_deliver(self.store.order(order["id"]))
+        if self.settings.notify_sales:
+            kind = "🔁 Abonelik yenilendi" if renewal or payment.get("is_recurring") and not payment.get("is_first_recurring") \
+                else "💰 Yeni satış"
+            until = f"\nBitiş: {time.strftime('%d.%m.%Y', time.localtime(expires))}" if expires else ""
+            await self.notify_admins(f"{kind}: {order['title']} · ⭐{order['stars']}\nAlıcı: {_who(sender or {'id': user})}{until}")
 
     async def _command(self, user: int, text: str) -> None:
         command, _, argument = text.strip().partition(" ")

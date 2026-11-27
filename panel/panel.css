@@ -54,3 +54,4 @@ textarea { resize: vertical; }
 .actions { display: flex; gap: 8px; }
 .pay-item { gap: 2px; }
 .pay-item .meta { font-size: 12px; color: var(--hint); }
+p.muted.small { font-size: 12.5px; margin: -4px 0 4px; }

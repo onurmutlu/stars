@@ -39,6 +39,8 @@ class FakeBot:
             return self.world.webhooks.get(self.token, {"url": ""})
         if method == "createInvoiceLink":
             return f"https://t.me/$inv-{self.bot_id}-{payload['payload']}"
+        if method == "getChatMember":
+            return self.world.members.get((self.token, payload["chat_id"]), {"status": "left"})
         return True
 
     def of(self, method):
@@ -48,6 +50,7 @@ class FakeBot:
 class World:
     def __init__(self):
         self.bots, self.invalid, self.fail, self.webhooks, self.forwarded = {}, set(), {}, {}, []
+        self.members = {}
 
     def factory(self, token):
         self.bots.setdefault(token, FakeBot(token, self))
@@ -142,7 +145,7 @@ def test_connect_sets_webhook_menu_and_never_leaks_token(hub_client, world):
     bot = world.bots[TOKEN_A]
     (hook,) = bot.of("setWebhook")
     assert hook["url"] == f"https://hub.example.com/t/{shop['id']}/webhook" and len(hook["secret_token"]) >= 32
-    assert hook["allowed_updates"] == ["message", "pre_checkout_query"]
+    assert hook["allowed_updates"] == ["message", "pre_checkout_query", "my_chat_member"]
     assert bot.of("setChatMenuButton")[0]["menu_button"]["web_app"]["url"] == "https://hub.example.com/s/shop200001bot"
     row = hub_client.hub.registry.tenant(shop["id"])
     assert TOKEN_A.encode() not in row["token_enc"] and hub_client.hub.registry.token(row) == TOKEN_A
@@ -441,3 +444,26 @@ def test_shop_shows_admin_link_only_to_its_owner_and_buy_link_on_free_plan(world
         assert "admin_url" not in stranger and stranger["buy"]["url"] == "https://t.me/HubBot?start=lisans"
         # a session signed by another bot is not the owner of this shop
         assert "admin_url" not in client.get(url, headers=buyer(TOKEN_B, SELLER)).json()
+
+
+
+def test_channel_product_needs_the_bot_as_channel_admin(hub_client, world):
+    shop = ready_shop(hub_client)
+    url = f"/panel/api/shops/{shop['id']}/products"
+    item = {"id": "vip", "title": "VIP", "description": "d", "stars": 10, "content": "Hoş geldin",
+            "kind": "subscription", "channel_id": "-1001234567890"}
+    assert "kanal" in hub_client.post(url, headers=panel(), json=item).json()["detail"].lower()
+    world.members[(TOKEN_A, -1001234567890)] = {"status": "administrator", "can_invite_users": True,
+                                                "can_restrict_members": False}
+    assert "yasakla" in hub_client.post(url, headers=panel(), json=item).json()["detail"]
+    world.members[(TOKEN_A, -1001234567890)]["can_restrict_members"] = True
+    assert hub_client.post(url, headers=panel(), json=item).status_code == 200
+    products = hub_client.get(f"/s/{shop['username']}/api/products").json()
+    assert any(p["id"] == "vip" and p["channel"] is True and "channel_id" not in p for p in products)
+    # the bot being made admin of a channel shows up in the panel
+    tenant_hook(hub_client, shop["id"], {"update_id": 50, "my_chat_member": {
+        "chat": {"id": -1009, "type": "channel", "title": "Kanalım"}, "from": {"id": SELLER},
+        "new_chat_member": {"status": "administrator", "can_invite_users": True, "can_restrict_members": True}}})
+    view = hub_client.get(f"/panel/api/shops/{shop['id']}", headers=panel()).json()
+    assert view["channels"] == [{"id": -1009, "title": "Kanalım", "type": "channel", "ready": True}]
+    assert "-1009" in world.bots[TOKEN_A].of("sendMessage")[-1]["text"]

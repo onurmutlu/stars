@@ -31,6 +31,8 @@ class FakeAPI:
             raise RuntimeError(f"{method} failed")
         if method == "createInvoiceLink":
             return f"https://t.me/$invoice-{payload['payload']}"
+        if method == "createChatInviteLink":
+            return {"invite_link": f"https://t.me/+inv{len(self.of('createChatInviteLink')) - 1}"}
         return True
 
     def of(self, method):
@@ -56,7 +58,7 @@ PRODUCTS = {
 def make_settings(**overrides):
     values = dict(bot_token=TOKEN, webhook_secret=SECRET, webapp_url="https://shop.example.com",
                   support_text="destek@example.com", terms_text="Dijital ürün, iade 7 gün.",
-                  sales_enabled=True, admin_ids=frozenset({ADMIN}))
+                  sales_enabled=True, admin_ids=frozenset({ADMIN}), notify_sales=False)
     values.update(overrides)
     return Settings(**values)
 

@@ -29,6 +29,7 @@ class Product:
     photo_url: str | None = None
     category: str | None = None   # Mini App filter chip, e.g. "Rehberler"
     badge: str | None = None      # short label on the card, e.g. "Yeni", "Popüler"
+    channel_id: int | None = None # private channel/group: buyers get a one-time invite, removed when access ends
 
     def public(self) -> dict:
         """What the Mini App may see before payment: never the content."""
@@ -41,12 +42,22 @@ class Product:
             "photo_url": self.photo_url,
             "category": self.category,
             "badge": self.badge,
+            "channel": self.channel_id is not None,
         }
 
 def _optional_text(value):
     """Blank strings become None; non-strings pass through so validation can reject them."""
     if isinstance(value, str):
         return value.strip() or None
+    return value
+
+
+def _channel_id(value):
+    """-1001234567890 as a number or a string; blank means no channel. Anything else fails validation."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, str) and re.fullmatch(r"\s*-\d{5,20}\s*", value):
+        return int(value)
     return value
 
 
@@ -64,6 +75,7 @@ def validate_product(item: dict) -> Product:
         photo_url=item.get("photo_url") or None,
         category=_optional_text(item.get("category")),
         badge=_optional_text(item.get("badge")),
+        channel_id=_channel_id(item.get("channel_id")),
     )
     if not isinstance(product.id, str) or not PRODUCT_ID.match(product.id):
         raise ConfigError(f"Geçersiz ürün id: {product.id!r} (a-z, 0-9, _ ve -; en fazla 32)")
@@ -84,6 +96,9 @@ def validate_product(item: dict) -> Product:
         raise ConfigError(f"{product.id}: kategori en fazla 24 karakter olmalı")
     if product.badge is not None and (not isinstance(product.badge, str) or len(product.badge) > 16):
         raise ConfigError(f"{product.id}: etiket en fazla 16 karakter olmalı")
+    if product.channel_id is not None and (not isinstance(product.channel_id, int) or isinstance(product.channel_id, bool)
+                                           or product.channel_id >= 0):
+        raise ConfigError(f"{product.id}: kanal ID'si -100 ile başlayan bir sayı olmalı (bot kanala eklenince sana yazar)")
     return product
 
 
@@ -125,6 +140,8 @@ class Settings:
     init_data_max_age: int = 86400
     order_ttl: int = 3600
     checkout_urls: tuple[tuple[str, str], ...] = ()
+    notify_sales: bool = True           # DM admins on every sale, renewal and refund
+    summary_hour: int = 9               # local hour of the daily summary to admins; -1 turns it off
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -149,6 +166,8 @@ class Settings:
             admin_ids=frozenset(int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x),
             init_data_max_age=int(os.getenv("INIT_DATA_MAX_AGE", "86400")),
             order_ttl=int(os.getenv("ORDER_TTL", "3600")),
+            notify_sales=os.getenv("NOTIFY_SALES", "true").strip().lower() not in ("0", "false", "no", "off"),
+            summary_hour=int(os.getenv("DAILY_SUMMARY_HOUR", "9")),
             checkout_urls=tuple(
                 (plan, url.strip())
                 for plan, key in (

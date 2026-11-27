@@ -89,7 +89,13 @@ tests/          67 test: imza, ödeme kuralları, iade, abonelik, webhook, kirac
     "kind": "subscription", "content": "https://t.me/+davet"}
    ```
    `kind`: `one_time` (varsayılan) ya da `subscription` (30 günde bir yenilenir). `content` ödemeden sonra gösterilen
-   metin ya da bağlantıdır (en fazla 4096 karakter). İsteğe bağlı: `photo_url` (https).
+   metin ya da bağlantıdır (en fazla 4096 karakter). İsteğe bağlı: `photo_url` (https), `category`
+   (Mini App filtresi), `badge` ("Yeni", "Popüler"), `channel_id`.
+
+   **Özel kanal/grup erişimi satmak (`channel_id`):** Botu kanala yönetici yap ("Kullanıcı davet et" ve
+   "Üyeleri yasakla" açık). Bot yöneticilere kanalın ID'sini yazar (`-100…`). Bu ID'yi ürüne `channel_id` olarak
+   ekle. Ödeyen kişiye sadece ona ait, tek kullanımlık ve 7 gün geçerli bir davet linki gider. Abonelik biter ya da
+   ödeme iade edilirse kişi kanaldan çıkarılır (kalıcı yasak yok); abonelik yenilenirse yeni link gelir.
 4. **Çalıştır:**
    ```bash
    docker compose up -d --build
@@ -115,7 +121,11 @@ python -m app.cli issues                 # iade ya da elle teslimat bekleyen öd
 python -m app.cli refund CHARGE_ID       # onay sorar; --yes ile sormaz
 ```
 
-Bot içinden admin (`ADMIN_IDS`): `/issues`, `/refund CHARGE_ID`.
+Bot içinden admin (`ADMIN_IDS`): `/admin`, `/issues`, `/refund CHARGE_ID`.
+
+Yöneticiler her satışta, abonelik yenilemesinde ve iadede bota mesaj alır (`NOTIFY_SALES=false` kapatır).
+Her sabah `DAILY_SUMMARY_HOUR` (varsayılan 9, sunucu saati; `-1` kapatır) son 24 saatin özetini gönderir:
+satış, ⭐ toplamı, yeni müşteri, yenileme, iade, aktif abonelik ve en çok satan ürün. Hiç hareket yoksa mesaj atmaz.
 
 ## Bilinmesi gerekenler
 

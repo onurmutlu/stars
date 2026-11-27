@@ -15,6 +15,9 @@
       fact_sub: "30 günde bir otomatik yenilenir; Telegram ayarlarından istediğin zaman iptal edebilirsin.",
       fact_once: "Tek seferlik ödeme; içerik “Satın aldıklarım”da kalır.",
       fact_support: "Ödeme sorunu için /paysupport yaz.",
+      fact_channel: "Ödemeden sonra özel kanala sadece sana ait tek kullanımlık davet linki gelir.",
+      fact_channel_sub: "Abonelik bittiğinde kanal erişimi kapanır; yenilersen yeni link gelir.",
+      channel_tag: "Özel kanal",
       paid: "Ödeme alındı 🎉", cancelled: "Ödeme iptal edildi.", failed: "Ödeme tamamlanamadı.",
       waiting: "Ödeme onaylanıyor…", slow: "Ödeme alındı; içerik birkaç dakika içinde bot üzerinden de gelecek.",
       error: "Bir şeyler ters gitti. Tekrar dene.", until: "Geçerlilik:", refunded: "İade edildi", expired: "Süresi doldu",
@@ -31,6 +34,9 @@
       fact_sub: "Renews every 30 days; cancel anytime in Telegram settings.",
       fact_once: "One-time payment; the content stays in “My purchases”.",
       fact_support: "Payment problem? Send /paysupport.",
+      fact_channel: "After payment you get a personal one-time invite to the private channel.",
+      fact_channel_sub: "Channel access ends with the subscription; renewing sends a new invite.",
+      channel_tag: "Private channel",
       paid: "Payment received 🎉", cancelled: "Payment cancelled.", failed: "Payment failed.",
       waiting: "Confirming payment…", slow: "Payment received; the bot will also send your content in a few minutes.",
       error: "Something went wrong. Please try again.", until: "Valid until:", refunded: "Refunded", expired: "Expired",
@@ -217,13 +223,19 @@
     if (product.badge) tags.push(el("span", "badge solid", product.badge));
     if (product.category) tags.push(el("span", "badge", product.category));
     if (product.kind === "subscription") tags.push(el("span", "badge", t("monthly")));
+    if (product.channel) tags.push(el("span", "badge", t("channel_tag")));
     if (isOwned) tags.push(el("span", "badge ok", t("yours")));
     $("detail-tags").replaceChildren(...tags);
     $("detail-title").textContent = product.title;
     $("detail-price").textContent = String(product.stars);
     $("detail-desc").textContent = product.description;
     const facts = [["⚡", t("fact_instant")], [product.kind === "subscription" ? "🔁" : "📦",
-      t(product.kind === "subscription" ? "fact_sub" : "fact_once")], ["💬", t("fact_support")]];
+      t(product.kind === "subscription" ? "fact_sub" : "fact_once")]];
+    if (product.channel) {
+      facts.push(["📣", t("fact_channel")]);
+      if (product.kind === "subscription") facts.push(["🔒", t("fact_channel_sub")]);
+    }
+    facts.push(["💬", t("fact_support")]);
     $("detail-facts").replaceChildren(...facts.map(([icon, text]) => {
       const li = el("li");
       li.append(el("span", "", icon), el("span", "", text));

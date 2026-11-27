@@ -35,7 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import initdata, assets
-from .config import ConfigError, Product, Settings
+from .config import ConfigError, Product, Settings, validate_product
 from .shop import ShopError, StarsShop, process_update
 from .store import Store
 from .telegram import BotAPI, TelegramError
@@ -46,7 +46,8 @@ ROOT = Path(__file__).resolve().parents[1]
 WEBAPP_DIR = ROOT / "webapp"
 PANEL_DIR = ROOT / "panel"
 
-SHOP_UPDATES = ["message", "pre_checkout_query"]
+SHOP_UPDATES = ["message", "pre_checkout_query", "my_chat_member"]
+FORWARD_SHOP_UPDATES = ["message", "pre_checkout_query"]  # a forwarded bot keeps its own update set otherwise
 SHOP_COMMANDS = [
     {"command": "start", "description": "Mağazayı aç"},
     {"command": "orders", "description": "Satın aldıklarımı yeniden gönder"},
@@ -182,7 +183,7 @@ class Hub:
         try:
             if tenant["forward_url"]:
                 previous = json.loads(tenant["forward_updates"] or "[]")
-                allowed = sorted(set(previous) | set(SHOP_UPDATES)) if previous else []
+                allowed = sorted(set(previous) | set(FORWARD_SHOP_UPDATES)) if previous else []
                 await api("setWebhook", url=self.settings.webhook_url(tenant["id"]),
                           secret_token=tenant["webhook_secret"], allowed_updates=allowed)
             else:
@@ -366,7 +367,7 @@ class Hub:
             await self.billing.redeliver()
         for tenant in self.registry.all():
             try:
-                await self.shop(tenant).redeliver()
+                await self.shop(tenant).tick()
             except Exception as exc:  # noqa: BLE001 - one tenant must not stop the others
                 log.error("Kiracı %s yeniden teslim hatası: %s", tenant["id"], type(exc).__name__)
 
@@ -560,13 +561,32 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         registry.ensure_owner(owner)
         return owner
 
+    async def check_channel(tenant, item) -> None:
+        """Selling channel access needs the shop bot as an admin that can invite and remove members."""
+        if not isinstance(item, dict):
+            raise ShopError("Geçersiz ürün")
+        product = validate_product(item)  # same validation as saving, so the channel id is an int here
+        if product.channel_id is None:
+            return
+        try:
+            member = await hub.api_for(tenant)("getChatMember", chat_id=product.channel_id, user_id=tenant["bot_id"])
+        except TelegramError:
+            raise ShopError("Kanal bulunamadı ya da bot kanalda değil. Botu kanala yönetici olarak ekle.") from None
+        if member.get("status") != "administrator" or not member.get("can_invite_users"):
+            raise ShopError("Bot bu kanalda yönetici değil ya da 'Kullanıcı davet et' yetkisi kapalı.")
+        if not member.get("can_restrict_members"):
+            raise ShopError("Botun 'Üyeleri yasakla' yetkisi kapalı: süresi biten aboneler kanaldan çıkarılamaz.")
+
     def tenant_view(tenant) -> dict:
         products = [dict(p) for p in registry.products(tenant["id"])]
+        channels = [{"id": c["id"], "title": c["title"], "type": c["type"],
+                     "ready": bool(c["can_invite"]) and bool(c["can_restrict"])}
+                    for c in hub.store_for(tenant["id"]).channels()]
         limit = hub.plan(tenant["owner"]).max_products
         for index, product in enumerate(products):
             product["over_limit"] = index >= limit
             product.pop("tenant", None)
-        return public_tenant(tenant, settings) | {"products": products}
+        return public_tenant(tenant, settings) | {"products": products, "channels": channels}
 
     @app.get("/panel")
     @app.get("/panel/")
@@ -622,7 +642,9 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
     @app.post("/panel/api/shops/{tenant_id}/products")
     async def panel_add_product(tenant_id: str, request: Request, x_telegram_init_data: str | None = Header(None)):
         tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
-        registry.save_product(tenant_id, await request.json(), hub.plan(tenant["owner"]).max_products, create=True)
+        item = await request.json()
+        await check_channel(tenant, item)
+        registry.save_product(tenant_id, item, hub.plan(tenant["owner"]).max_products, create=True)
         return tenant_view(tenant)
 
     @app.put("/panel/api/shops/{tenant_id}/products/{product_id}")
@@ -633,6 +655,7 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         if not isinstance(item, dict):
             raise ShopError("Geçersiz ürün")
         item["id"] = product_id
+        await check_channel(tenant, item)
         registry.save_product(tenant_id, item, hub.plan(tenant["owner"]).max_products, create=False)
         return tenant_view(tenant)
 

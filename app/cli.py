@@ -32,7 +32,7 @@ async def setup(settings: Settings) -> None:
         me = await api("getMe")
         await api("setWebhook", url=f"{settings.webapp_url}/telegram/webhook",
                   secret_token=settings.webhook_secret,
-                  allowed_updates=["message", "pre_checkout_query"], drop_pending_updates=False)
+                  allowed_updates=["message", "pre_checkout_query", "my_chat_member"], drop_pending_updates=False)
         await api("setChatMenuButton", menu_button={
             "type": "web_app", "text": "Mağaza", "web_app": {"url": settings.webapp_url + "/app"}})
         await api("setMyCommands", commands=COMMANDS)
@@ -55,12 +55,12 @@ async def poll(settings: Settings) -> None:
         while True:
             try:
                 updates = await api("getUpdates", offset=offset, timeout=25,
-                                    allowed_updates=["message", "pre_checkout_query"])
+                                    allowed_updates=["message", "pre_checkout_query", "my_chat_member"])
                 for update in updates:
                     await process_update(shop, update, failures)
                     offset = update["update_id"] + 1
                     store.set_state("offset", offset)
-                await shop.redeliver()
+                await shop.tick()
             except Exception as exc:  # noqa: BLE001
                 logging.error("Güncelleme işlenemedi: %s; yeniden denenecek", type(exc).__name__)
                 await asyncio.sleep(5)

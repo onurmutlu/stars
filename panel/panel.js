@@ -314,6 +314,13 @@
     $("p-photo").value = p && p.photo_url ? p.photo_url : "";
     $("p-category").value = p && p.category ? p.category : "";
     $("p-badge").value = p && p.badge ? p.badge : "";
+    $("p-channel").value = p && p.channel_id ? String(p.channel_id) : "";
+    $("p-channels").replaceChildren(...(shop.channels || []).map((c) => {
+      const option = el("option");
+      option.value = String(c.id);
+      option.label = `${c.title}${c.ready ? "" : " (yetki eksik)"}`;
+      return option;
+    }));
     show("product");
   }
 
@@ -323,6 +330,7 @@
       description: $("p-description").value.trim(), stars: parseInt($("p-stars").value, 10),
       kind: $("p-kind").value, content: $("p-content").value.trim(), photo_url: $("p-photo").value.trim() || null,
       category: $("p-category").value.trim() || null, badge: $("p-badge").value.trim() || null,
+      channel_id: $("p-channel").value.trim() || null,
     };
     const path = `/panel/api/shops/${shop.id}/products` + (editing ? `/${encodeURIComponent(editing)}` : "");
     await api(path, json(editing ? "PUT" : "POST", item));
