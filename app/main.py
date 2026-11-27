@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import hmac
 import logging
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -22,6 +23,13 @@ log = logging.getLogger("stars_shop")
 WEBAPP_DIR = Path(__file__).resolve().parents[1] / "webapp"
 
 
+def _mtime(path) -> float | None:
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return None
+
+
 class OrderRequest(BaseModel):
     product_id: str = Field(min_length=1, max_length=32)
 
@@ -29,16 +37,33 @@ class OrderRequest(BaseModel):
 def create_app(settings: Settings | None = None, products: dict[str, Product] | None = None,
                store: Store | None = None, api=None, background: bool = True) -> FastAPI:
     settings = settings or Settings.from_env()
+    watch_products = products is None  # products from the file are reloaded when it changes
     products = products if products is not None else load_products(settings.products_path)
     store = store or Store(settings.db_path)
     own_api = api is None
     api = api or BotAPI(settings.bot_token)
     shop = StarsShop(api, settings, products, store)
     failures: dict[int, int] = {}
+    seen = {"mtime": _mtime(settings.products_path) if watch_products else None}
+
+    def refresh_products() -> None:
+        """Pick up edits to products.json without a restart. A broken file keeps the old catalog."""
+        if not watch_products:
+            return
+        mtime = _mtime(settings.products_path)
+        if mtime == seen["mtime"]:
+            return
+        seen["mtime"] = mtime
+        try:
+            shop.products = load_products(settings.products_path)
+            log.info("Ürünler yeniden yüklendi: %s ürün", len(shop.products))
+        except Exception as exc:  # noqa: BLE001
+            log.error("products.json okunamadı, eski katalog kullanılıyor: %s", exc)
 
     async def redeliver_loop():
         while True:
             try:
+                refresh_products()
                 await shop.tick()
             except Exception as exc:  # noqa: BLE001
                 log.error("Yeniden teslim döngüsü hatası: %s", type(exc).__name__)
@@ -95,11 +120,13 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
 
     @app.get("/api/products")
     async def list_products():
+        refresh_products()
         return shop.catalog()
 
     @app.post("/api/orders")
     async def create_order(body: OrderRequest, x_telegram_init_data: str | None = Header(None)):
         user = user_id(x_telegram_init_data)
+        refresh_products()
         try:
             return await shop.create_invoice(user, body.product_id)
         except TelegramError as exc:
@@ -119,6 +146,7 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
         if not hmac.compare_digest(x_telegram_bot_api_secret_token or "", settings.webhook_secret):
             raise HTTPException(403)
         update = await request.json()
+        refresh_products()
         try:
             await process_update(shop, update, failures)
         except Exception:

@@ -402,3 +402,22 @@ def test_daily_summary_is_silent_without_activity(api, store):
     with channel_client(api, store, summary_hour=0) as client:
         assert asyncio.run(client.app.state.shop.daily_summary()) is False
         assert not api.of("sendMessage")
+
+
+def test_products_json_edits_apply_without_restart(tmp_path, api, store, monkeypatch):
+    import json
+    import os
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    from tests.conftest import make_settings
+    path = tmp_path / "products.json"
+    item = {"id": "a", "title": "A", "description": "d", "stars": 1, "content": "c"}
+    path.write_text(json.dumps([item]))
+    with TestClient(create_app(make_settings(products_path=str(path)), None, store, api, background=False)) as client:
+        assert [p["id"] for p in client.get("/api/products").json()] == ["a"]
+        path.write_text(json.dumps([item, item | {"id": "b", "channel_id": -1001}]))
+        os.utime(path, (time.time() + 5, time.time() + 5))
+        assert [p["id"] for p in client.get("/api/products").json()] == ["a", "b"]
+        path.write_text("{broken")
+        os.utime(path, (time.time() + 10, time.time() + 10))
+        assert [p["id"] for p in client.get("/api/products").json()] == ["a", "b"]
