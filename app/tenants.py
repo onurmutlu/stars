@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS products(
     category TEXT,
     badge TEXT,
     channel_id INTEGER,
+    access_days INTEGER,
     position INTEGER NOT NULL DEFAULT 0,
     archived INTEGER NOT NULL DEFAULT 0,
     updated REAL NOT NULL,
@@ -177,7 +178,8 @@ class Registry:
             self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(products)")}
-        for column, kind in (("category", "TEXT"), ("badge", "TEXT"), ("channel_id", "INTEGER")):
+        for column, kind in (("category", "TEXT"), ("badge", "TEXT"), ("channel_id", "INTEGER"),
+                             ("access_days", "INTEGER")):
             if column not in columns:  # databases created before these fields
                 self.db.execute(f"ALTER TABLE products ADD COLUMN {column} {kind}")
         self.db.commit()
@@ -313,14 +315,16 @@ class Registry:
         with self.db:
             self.db.execute(
                 "INSERT INTO products(tenant,id,title,description,stars,content,kind,photo_url,category,badge,channel_id,"
-                "position,archived,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,?) ON CONFLICT(tenant,id) DO UPDATE SET "
+                "access_days,position,archived,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,?) "
+                "ON CONFLICT(tenant,id) DO UPDATE SET "
                 "title=excluded.title, description=excluded.description, stars=excluded.stars, "
                 "content=excluded.content, kind=excluded.kind, photo_url=excluded.photo_url, "
-                "category=excluded.category, badge=excluded.badge, channel_id=excluded.channel_id, archived=0, "
+                "category=excluded.category, badge=excluded.badge, channel_id=excluded.channel_id, "
+                "access_days=excluded.access_days, archived=0, "
                 "updated=excluded.updated, position=COALESCE(?, products.position)",
                 (tenant_id, product.id, product.title, product.description, product.stars, product.content,
                  product.kind, product.photo_url, product.category, product.badge, product.channel_id,
-                 position or 0, time.time(), position),
+                 product.access_days, position or 0, time.time(), position),
             )
         return product
 
@@ -335,7 +339,8 @@ class Registry:
         """The products the shop may sell under the owner's current plan (first N by position)."""
         rows = self.products(tenant_id)[:limit]
         return {r["id"]: Product(r["id"], r["title"], r["description"], r["stars"], r["content"],
-                                 r["kind"], r["photo_url"], r["category"], r["badge"], r["channel_id"])
+                                 r["kind"], r["photo_url"], r["category"], r["badge"], r["channel_id"],
+                                 r["access_days"])
                 for r in rows}
 
     # runtime settings ------------------------------------------------------------

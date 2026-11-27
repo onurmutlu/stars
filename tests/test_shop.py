@@ -499,3 +499,45 @@ def test_only_admins_can_attach_files(client, api, store):
               "caption": "/dosya guide", "document": {"file_id": "X"}}}
     hook(client, upload)
     assert store.product_file("guide") is None
+
+
+# ------------------------------------------------------------------ timed access
+def test_timed_one_time_access_expires_and_can_be_bought_again(api, store):
+    from fastapi.testclient import TestClient
+    from app.config import Product
+    from app.main import create_app
+    from tests.conftest import make_settings
+    products = {"kamp": Product("kamp", "30 Günlük Kamp", "Kamp", 90, "Kamp linki", access_days=30, channel_id=-1007),
+                "pdf": Product("pdf", "PDF", "Süresiz", 10, "pdf")}
+    with TestClient(create_app(make_settings(), products, store, api, background=False)) as client:
+        shop = client.app.state.shop
+        order_id = order(client, "kamp")
+        hook(client, paid(order_id, amount=90, charge="t1"))
+        view = client.get(f"/api/orders/{order_id}", headers=headers()).json()
+        assert view["status"] == "paid" and abs(view["access_until"] - (time.time() + 30 * 86400)) < 60
+        assert client.post("/api/orders", json={"product_id": "kamp"}, headers=headers()).status_code == 409
+        later = time.time() + 31 * 86400
+        asyncio.run(shop.sweep_channels(later))
+        assert api.of("banChatMember")[0]["chat_id"] == -1007
+        assert not store.has_access(store.order(order_id), later)
+        assert [o for o in store.expired_timed_orders(later)][0]["id"] == order_id
+        # a product without days never expires
+        pdf_order = order(client, "pdf")
+        hook(client, paid(pdf_order, amount=10, charge="t2", update_id=5))
+        assert store.has_access(store.order(pdf_order), later)
+
+
+def test_timed_product_without_channel_tells_buyer_when_it_ends(api, store):
+    from fastapi.testclient import TestClient
+    from app.config import Product
+    from app.main import create_app
+    from tests.conftest import make_settings
+    products = {"deneme": Product("deneme", "7 Gün Deneme", "d", 5, "link", access_days=7)}
+    with TestClient(create_app(make_settings(), products, store, api, background=False)) as client:
+        order_id = order(client, "deneme")
+        hook(client, paid(order_id, amount=5, charge="t3"))
+        shop = client.app.state.shop
+        assert asyncio.run(shop.notify_expired(time.time() + 86400)) == 0
+        assert asyncio.run(shop.notify_expired(time.time() + 8 * 86400)) == 1
+        assert "doldu" in api.of("sendMessage")[-1]["text"]
+        assert asyncio.run(shop.notify_expired(time.time() + 9 * 86400)) == 0

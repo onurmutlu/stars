@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS inbox(
     admin INTEGER NOT NULL, admin_message INTEGER NOT NULL, user INTEGER NOT NULL, created REAL NOT NULL,
     PRIMARY KEY(admin, admin_message));
 CREATE TABLE IF NOT EXISTS cart_reminders(order_id TEXT PRIMARY KEY, sent REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS expiry_notices(order_id TEXT PRIMARY KEY, sent REAL NOT NULL);
 -- a file the bot sends after payment (Telegram file_id of THIS bot; the seller sends it with /dosya <product>)
 CREATE TABLE IF NOT EXISTS product_files(
     product TEXT PRIMARY KEY, file_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT, added REAL NOT NULL);
@@ -72,18 +73,21 @@ class Store:
         if str(path) != ":memory:":
             self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
-        if "channel" not in {row[1] for row in self.db.execute("PRAGMA table_info(orders)")}:
-            self.db.execute("ALTER TABLE orders ADD COLUMN channel INTEGER")  # databases from before channels
-            self.db.commit()
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(orders)")}
+        for column in ("channel", "access_days"):  # databases from before these fields
+            if column not in columns:
+                self.db.execute(f"ALTER TABLE orders ADD COLUMN {column} INTEGER")
+        self.db.commit()
 
     # orders -----------------------------------------------------------------
-    def create_order(self, user: int, product) -> str:
+    def create_order(self, user: int, product, stars: int | None = None) -> str:
         order_id = uuid.uuid4().hex
         with self.db:
             self.db.execute(
-                "INSERT INTO orders(id,user,product,kind,title,stars,content,created,channel) VALUES(?,?,?,?,?,?,?,?,?)",
-                (order_id, user, product.id, product.kind, product.title, product.stars, product.content, time.time(),
-                 getattr(product, "channel_id", None)),
+                "INSERT INTO orders(id,user,product,kind,title,stars,content,created,channel,access_days) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (order_id, user, product.id, product.kind, product.title, stars if stars is not None else product.stars,
+                 product.content, time.time(), getattr(product, "channel_id", None), getattr(product, "access_days", None)),
             )
         return order_id
 
@@ -109,14 +113,14 @@ class Store:
         ).fetchall()
 
     def has_access(self, order, now: float | None = None) -> bool:
-        """A paid, unrefunded one-time order, or a subscription that has not expired."""
+        """A paid, unrefunded order whose time (subscription period or access days) has not run out."""
         now = time.time() if now is None else now
         payments = self.live_payments(order["id"])
         if not payments:
             return False
-        if order["kind"] == "subscription":
-            return max((p["expires"] or 0) for p in payments) > now
-        return True
+        if order["kind"] != "subscription" and any(p["expires"] is None for p in payments):
+            return True  # one-time purchase without a time limit
+        return max((p["expires"] or 0) for p in payments) > now
 
     def access_until(self, order) -> float | None:
         payments = self.live_payments(order["id"])
@@ -285,6 +289,17 @@ class Store:
             "AND NOT EXISTS (SELECT 1 FROM cart_reminders c JOIN orders y ON y.id=c.order_id "
             "                WHERE y.user=o.user AND y.product=o.product)",
             (now - min_age, now - max_age)).fetchall()
+
+    def expired_timed_orders(self, now: float):
+        """One-time orders with access days whose access ended and the buyer was not told yet."""
+        rows = self.db.execute(
+            "SELECT o.* FROM orders o WHERE o.paid=1 AND o.kind!='subscription' AND o.access_days IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM expiry_notices e WHERE e.order_id=o.id)").fetchall()
+        return [o for o in rows if self.live_payments(o["id"]) and not self.has_access(o, now)]
+
+    def mark_expiry_noticed(self, order_id: str) -> None:
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO expiry_notices VALUES(?,?)", (order_id, time.time()))
 
     def mark_reminded(self, order_id: str) -> None:
         with self.db:

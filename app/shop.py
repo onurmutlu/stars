@@ -114,7 +114,7 @@ class StarsShop:
                 view["content"] += f"\n\n👉 Katılma linkin (tek kullanımlık): {access['invite']}"
             view["access_until"] = self.store.access_until(order)
         elif order["paid"]:
-            view["status"] = "expired" if order["kind"] == "subscription" and self.store.live_payments(order["id"]) else "refunded"
+            view["status"] = "expired" if self.store.live_payments(order["id"]) else "refunded"
         else:
             view["status"] = "pending"
         return view
@@ -278,7 +278,7 @@ class StarsShop:
 
     async def tick(self, now: float | None = None) -> None:
         """Background work, once a minute: deliveries, channel removals, daily summary."""
-        for job in (self.redeliver, self.sweep_channels, self.daily_summary, self.remind_carts):
+        for job in (self.redeliver, self.sweep_channels, self.daily_summary, self.remind_carts, self.notify_expired):
             try:
                 await job(now)
             except Exception as exc:  # noqa: BLE001 - one job must not stop the others
@@ -408,6 +408,28 @@ class StarsShop:
         else:
             raise ShopError("Boş mesaj gönderilemez.")
 
+    async def notify_expired(self, now: float | None = None) -> int:
+        """Tell buyers of a timed one-time product that their access ended and how to renew.
+        (Channel products also get removed by sweep_channels, which sends its own message.)"""
+        now = time.time() if now is None else now
+        sent = 0
+        for order in self.store.expired_timed_orders(now):
+            self.store.mark_expiry_noticed(order["id"])
+            if order["channel"]:
+                continue
+            buttons = []
+            if order["product"] in self.products:
+                buttons = [[{"text": "🔁 Yeniden al", "web_app": {"url": f"{self.settings.webapp_url}/app?p={order['product']}"}}]]
+            try:
+                extra = {"reply_markup": {"inline_keyboard": buttons}} if buttons else {}
+                await self.api("sendMessage", chat_id=order["user"],
+                               text=f"'{order['title']}' erişim süren ({order['access_days']} gün) doldu. "
+                                    "Devam etmek istersen yeniden alabilirsin.", **extra)
+                sent += 1
+            except Exception as exc:  # noqa: BLE001
+                log.info("Süre bitti bildirimi gönderilemedi: %s", type(exc).__name__)
+        return sent
+
     async def remind_carts(self, now: float | None = None) -> int:
         """One gentle reminder for an order left unpaid for an hour (never twice for the same product)."""
         if not self.settings.cart_reminder or not self.settings.sales_enabled:
@@ -465,6 +487,8 @@ class StarsShop:
             issue("order_already_paid")  # a second charge for a one-time order: refund it
             log.error("Tek seferlik sipariş ikinci kez ödendi: order=%s charge=%s", order["id"], charge)
             return
+        elif order["access_days"]:
+            expires = int(time.time()) + int(order["access_days"]) * 86400
         renewal = bool(self.store.live_payments(order["id"]))
         self.store.add_payment(charge, order, expires, bool(payment.get("is_recurring")))
         if order["channel"]:

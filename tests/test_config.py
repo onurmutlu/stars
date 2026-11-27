@@ -55,3 +55,14 @@ def test_category_and_badge_are_optional_and_public(tmp_path):
     product = load_products(write(tmp_path, [GOOD | {"category": " Rehberler ", "badge": ""}]))["guide"]
     assert product.category == "Rehberler" and product.badge is None
     assert product.public()["category"] == "Rehberler" and "content" not in product.public()
+
+
+@pytest.mark.parametrize("change", [{"access_days": 0}, {"access_days": 4000}, {"access_days": "x"},
+                                    {"access_days": 30, "kind": "subscription"}])
+def test_access_days_rules(tmp_path, change):
+    with pytest.raises(ConfigError):
+        load_products(write(tmp_path, [GOOD | change]))
+
+
+def test_access_days_accepts_numbers_and_strings(tmp_path):
+    assert load_products(write(tmp_path, [GOOD | {"access_days": "90"}]))["guide"].access_days == 90

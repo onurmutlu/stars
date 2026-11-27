@@ -30,6 +30,7 @@ class Product:
     category: str | None = None   # Mini App filter chip, e.g. "Rehberler"
     badge: str | None = None      # short label on the card, e.g. "Yeni", "Popüler"
     channel_id: int | None = None # private channel/group: buyers get a one-time invite, removed when access ends
+    access_days: int | None = None # one-time purchase that gives N days of access (e.g. 7, 90, 365)
 
     def public(self) -> dict:
         """What the Mini App may see before payment: never the content."""
@@ -43,12 +44,21 @@ class Product:
             "category": self.category,
             "badge": self.badge,
             "channel": self.channel_id is not None,
+            "access_days": self.access_days,
         }
 
 def _optional_text(value):
     """Blank strings become None; non-strings pass through so validation can reject them."""
     if isinstance(value, str):
         return value.strip() or None
+    return value
+
+
+def _optional_int(value):
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value)
     return value
 
 
@@ -76,6 +86,7 @@ def validate_product(item: dict) -> Product:
         category=_optional_text(item.get("category")),
         badge=_optional_text(item.get("badge")),
         channel_id=_channel_id(item.get("channel_id")),
+        access_days=_optional_int(item.get("access_days")),
     )
     if not isinstance(product.id, str) or not PRODUCT_ID.match(product.id):
         raise ConfigError(f"Geçersiz ürün id: {product.id!r} (a-z, 0-9, _ ve -; en fazla 32)")
@@ -99,6 +110,12 @@ def validate_product(item: dict) -> Product:
     if product.channel_id is not None and (not isinstance(product.channel_id, int) or isinstance(product.channel_id, bool)
                                            or product.channel_id >= 0):
         raise ConfigError(f"{product.id}: kanal ID'si -100 ile başlayan bir sayı olmalı (bot kanala eklenince sana yazar)")
+    if product.access_days is not None:
+        if not isinstance(product.access_days, int) or isinstance(product.access_days, bool) \
+                or not 1 <= product.access_days <= 3650:
+            raise ConfigError(f"{product.id}: erişim süresi 1–3650 gün olmalı")
+        if product.kind == "subscription":
+            raise ConfigError(f"{product.id}: abonelik zaten 30 günde bir yenilenir; süre sadece tek seferlik üründe kullanılır")
     return product
 
 
