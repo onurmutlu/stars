@@ -121,7 +121,21 @@ python -m app.cli issues                 # iade ya da elle teslimat bekleyen öd
 python -m app.cli refund CHARGE_ID       # onay sorar; --yes ile sormaz
 ```
 
-Bot içinden admin (`ADMIN_IDS`): `/admin`, `/issues`, `/refund CHARGE_ID`.
+Bot içinden admin (`ADMIN_IDS`): `/admin`, `/musteriler`, `/kod`, `/duyuru`, `/dosya`, `/issues`, `/refund CHARGE_ID`.
+
+**Dosya teslimi:** Dosyayı (PDF, video, zip, ses, foto) bota gönder, açıklamasına `/dosya <ürün-kimliği>` yaz. Ödemeden
+sonra bot dosyayı alıcıya iletilemez/kaydedilemez olarak gönderir. `/dosya <ürün> sil` kaldırır.
+
+**Süreli erişim:** Tek seferlik ürüne `access_days` (1–3650) ver: tek ödeme, N gün erişim. Süre bitince içerik kapanır,
+kanal ürünüyse kişi kanaldan çıkar, alıcıya "süren doldu, yeniden al" mesajı gider. Otomatik çekim yok.
+
+**İndirim kodları:** `/kod YAZ20 20 7g 50x [ürün]` → %20, 7 gün, 50 kullanım. `/kod` listeler, `/kod YAZ20 sil` kapatır.
+Alıcı Mini App'te kodu yazar ya da `t.me/<bot>?start=kod_YAZ20` kampanya linkiyle gelir (kod otomatik uygulanır).
+Kodlar aboneliklerde geçmez; indirimli fiyat yukarı yuvarlanır, en az 1 ⭐.
+
+**Duyuru:** `/duyuru <metin>` önizleme gösterir, `/duyuru_onay` gönderir, `/duyuru_iptal` vazgeçer. Sadece botla konuşmuş
+kişilere gider, günde en fazla bir duyuru, her mesajın altında `/durdur` (çıkış) ve `/baslat` (geri açma) var. Botu
+engelleyenler listeden düşer. Gönderim saniyede ~25 mesajla arka planda yapılır, bitince yöneticiye rapor gelir.
 
 **Müşteri takibi (CRM):** Bota yazan ya da mağazayı açan herkes kaydedilir: ad, kullanıcı adı, ilk geldiği kaynak
 (`t.me/<bot>?start=instagram` → kaynak `instagram`) ve aşama (ziyaretçi → sepette → müşteri / abone / iade).

@@ -18,6 +18,10 @@
       fact_channel: "Ödemeden sonra özel kanala sadece sana ait tek kullanımlık davet linki gelir.",
       fact_channel_sub: "Abonelik bittiğinde kanal erişimi kapanır; yenilersen yeni link gelir.",
       channel_tag: "Özel kanal",
+      days_tag: "{n} gün erişim", per_days: "/ {n} gün",
+      fact_days: "Tek ödeme, {n} gün erişim. Süre bitince istersen yeniden alırsın; otomatik çekim yok.",
+      fact_file: "Dosya (PDF, video…) ödemeden hemen sonra bot sohbetine gelir.",
+      promo_placeholder: "İndirim kodu", promo_apply: "Uygula", promo_ok: "{code} uygulandı: %{p} indirim", promo_ready: "🎁 {code} kodu hazır: ürünü seçince uygulanır.",
       paid: "Ödeme alındı 🎉", cancelled: "Ödeme iptal edildi.", failed: "Ödeme tamamlanamadı.",
       waiting: "Ödeme onaylanıyor…", slow: "Ödeme alındı; içerik birkaç dakika içinde bot üzerinden de gelecek.",
       error: "Bir şeyler ters gitti. Tekrar dene.", until: "Geçerlilik:", refunded: "İade edildi", expired: "Süresi doldu",
@@ -37,6 +41,10 @@
       fact_channel: "After payment you get a personal one-time invite to the private channel.",
       fact_channel_sub: "Channel access ends with the subscription; renewing sends a new invite.",
       channel_tag: "Private channel",
+      days_tag: "{n}-day access", per_days: "/ {n} days",
+      fact_days: "One payment, {n} days of access. Buy again when it ends; no automatic charge.",
+      fact_file: "The file (PDF, video…) arrives in the bot chat right after payment.",
+      promo_placeholder: "Discount code", promo_apply: "Apply", promo_ok: "{code} applied: {p}% off", promo_ready: "🎁 Code {code} is ready: pick a product to use it.",
       paid: "Payment received 🎉", cancelled: "Payment cancelled.", failed: "Payment failed.",
       waiting: "Confirming payment…", slow: "Payment received; the bot will also send your content in a few minutes.",
       error: "Something went wrong. Please try again.", until: "Valid until:", refunded: "Refunded", expired: "Expired",
@@ -66,6 +74,8 @@
   let current = null;          // product shown in the detail view
   let view = "shop";
   let returnTo = "shop";       // where the back button goes from detail/content
+  let promoCode = "";          // code typed or brought by a campaign link
+  let quote = null;            // price of the current product with promoCode
 
   // ---------------------------------------------------------------- api
   async function api(path, options = {}) {
@@ -208,6 +218,7 @@
     row.append(el("span", "price", String(product.stars)));
     if (owned.has(product.id)) row.append(el("span", "mine", t("yours")));
     else if (product.kind === "subscription") row.append(el("span", "badge", t("per_month")));
+    else if (product.access_days) row.append(el("span", "badge", t("per_days", { n: product.access_days })));
     info.append(row);
     card.append(thumb, info);
     card.addEventListener("click", () => { haptic("light"); openDetail(product); });
@@ -224,13 +235,15 @@
     if (product.category) tags.push(el("span", "badge", product.category));
     if (product.kind === "subscription") tags.push(el("span", "badge", t("monthly")));
     if (product.channel) tags.push(el("span", "badge", t("channel_tag")));
+    if (product.access_days) tags.push(el("span", "badge", t("days_tag", { n: product.access_days })));
     if (isOwned) tags.push(el("span", "badge ok", t("yours")));
     $("detail-tags").replaceChildren(...tags);
     $("detail-title").textContent = product.title;
     $("detail-price").textContent = String(product.stars);
     $("detail-desc").textContent = product.description;
-    const facts = [["⚡", t("fact_instant")], [product.kind === "subscription" ? "🔁" : "📦",
-      t(product.kind === "subscription" ? "fact_sub" : "fact_once")]];
+    const facts = [["⚡", t("fact_instant")], product.kind === "subscription" ? ["🔁", t("fact_sub")]
+      : product.access_days ? ["⏳", t("fact_days", { n: product.access_days })] : ["📦", t("fact_once")]];
+    if (product.file) facts.push(["📎", t("fact_file")]);
     if (product.channel) {
       facts.push(["📣", t("fact_channel")]);
       if (product.kind === "subscription") facts.push(["🔒", t("fact_channel_sub")]);
@@ -241,6 +254,10 @@
       li.append(el("span", "", icon), el("span", "", text));
       return li;
     }));
+    quote = null;
+    $("promo-box").hidden = isOwned || product.kind === "subscription";
+    $("promo-code").value = promoCode;
+    $("promo-note").hidden = true;
     const label = isOwned ? t("open") : t("buy_for", { n: product.stars });
     $("detail-buy").textContent = label;
     $("detail-buy").disabled = false;
@@ -248,6 +265,43 @@
     returnTo = view === "detail" ? returnTo : (view === "library" ? "library" : "shop");
     show("detail");
     showMainButton(label);
+    if (promoCode && !isOwned && product.kind !== "subscription") applyPromo(true);
+  }
+
+  // Discount code: ask the server for the price, show it, and buy with it.
+  async function applyPromo(quiet) {
+    if (!current) return;
+    const code = $("promo-code").value.trim().toUpperCase();
+    const note = $("promo-note");
+    if (!code) { quote = null; promoCode = ""; note.hidden = true; return renderPrice(); }
+    try {
+      quote = await api(`/api/quote?product_id=${encodeURIComponent(current.id)}&code=${encodeURIComponent(code)}`);
+      promoCode = code;
+      note.textContent = t("promo_ok", { code: quote.code, p: quote.percent });
+      note.className = "promo-note";
+      note.hidden = false;
+      haptic("light");
+    } catch (error) {
+      quote = null;
+      if (quiet) { note.hidden = true; } else {
+        note.textContent = error.message;
+        note.className = "promo-note bad";
+        note.hidden = false;
+      }
+    }
+    renderPrice();
+  }
+
+  function renderPrice() {
+    if (!current) return;
+    const price = $("detail-price");
+    price.textContent = String(quote ? quote.stars : current.stars);
+    if (quote && quote.stars !== quote.original) price.append(el("span", "old-price", `⭐${quote.original}`));
+    if (!owned.has(current.id)) {
+      const label = t("buy_for", { n: quote ? quote.stars : current.stars });
+      $("detail-buy").textContent = label;
+      showMainButton(label);
+    }
   }
 
   function detailAction() {
@@ -342,7 +396,7 @@
     haptic("medium");
     try {
       const { order_id: orderId, invoice_link: link } = await api("/api/orders", {
-        method: "POST", body: JSON.stringify({ product_id: product.id }),
+        method: "POST", body: JSON.stringify({ product_id: product.id, code: quote ? quote.code : null }),
       });
       tg.openInvoice(link, async (status) => {
         busy(false);
@@ -390,8 +444,10 @@
 
   // Deep link: /app?p=<id> (sent by the bot for t.me/<bot>?start=p_<id>) or startapp=p_<id>.
   function requestedProduct() {
-    const fromQuery = new URLSearchParams(location.search).get("p");
+    const params = new URLSearchParams(location.search);
     const start = tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param;
+    promoCode = (params.get("code") || (start && start.startsWith("kod_") ? start.slice(4) : "") || "").toUpperCase();
+    const fromQuery = params.get("p");
     const id = fromQuery || (start && start.startsWith("p_") ? start.slice(2) : "");
     return id ? products.find((p) => p.id === id) : null;
   }
@@ -411,6 +467,8 @@
     tg.MainButton.onClick(detailAction);
     $("detail-buy").addEventListener("click", detailAction);
     $("detail-share").addEventListener("click", share);
+    $("promo-apply").addEventListener("click", () => applyPromo(false));
+    $("promo-code").addEventListener("keydown", (event) => { if (event.key === "Enter") applyPromo(false); });
     document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {
       haptic("select");
       tab.dataset.tab === "library" ? showLibrary() : show("shop");
@@ -454,6 +512,7 @@
     await loadProducts();
     const wanted = requestedProduct();
     if (wanted) openDetail(wanted);
+    else if (promoCode) toast(t("promo_ready", { code: promoCode }));
   }
 
   boot();

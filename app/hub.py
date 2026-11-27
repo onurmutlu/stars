@@ -614,8 +614,10 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
                      "ready": bool(c["can_invite"]) and bool(c["can_restrict"])}
                     for c in hub.store_for(tenant["id"]).channels()]
         limit = hub.plan(tenant["owner"]).max_products
+        files = hub.store_for(tenant["id"]).product_files()
         for index, product in enumerate(products):
             product["over_limit"] = index >= limit
+            product["file"] = files.get(product["id"], {}).get("name") or files.get(product["id"], {}).get("kind")
             product.pop("tenant", None)
         return public_tenant(tenant, settings) | {"products": products, "channels": channels}
 

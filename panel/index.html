@@ -86,6 +86,32 @@
       <p class="muted small">Botuna yazan ya da mağazayı açan herkes burada. Müşteri mesajları botundan sana gelir; cevaplamak için yanıtla ya da buradan yaz.</p>
       <div id="customers" class="list"></div>
 
+      <div class="section-head">
+        <h2>İndirim kodları</h2>
+      </div>
+      <article class="card form">
+        <div class="two">
+          <label>Kod <input id="promo-code" maxlength="24" placeholder="YAZ20" autocapitalize="characters" spellcheck="false"></label>
+          <label>İndirim % <input id="promo-percent" type="number" min="1" max="90" inputmode="numeric" placeholder="20"></label>
+        </div>
+        <div class="two">
+          <label>Geçerlilik (gün) <input id="promo-days" type="number" min="1" max="365" inputmode="numeric" placeholder="süresiz"></label>
+          <label>Kullanım sınırı <input id="promo-uses" type="number" min="1" inputmode="numeric" placeholder="sınırsız"></label>
+        </div>
+        <button class="btn wide" id="promo-add">Kod oluştur</button>
+      </article>
+      <div id="promos" class="list"></div>
+
+      <div class="section-head">
+        <h2>Duyuru</h2>
+      </div>
+      <article class="card form">
+        <p class="muted" id="bc-info">Botunla konuşmuş herkese gider. Günde en fazla bir duyuru; alıcılar /durdur ile çıkabilir.</p>
+        <textarea id="bc-text" rows="3" maxlength="3500" placeholder="Yeni deneme paketi çıktı! Bu hafta YAZ20 koduyla %20 indirim."></textarea>
+        <button class="btn wide" id="bc-send">Duyuruyu gönder</button>
+      </article>
+      <div id="broadcasts" class="list"></div>
+
       <h2>Ayarlar</h2>
       <article class="card form">
         <label>Mağaza adı <input id="f-shop-name" maxlength="64"></label>
@@ -136,6 +162,9 @@
           <label>Etiket <span class="muted">(isteğe bağlı)</span>
             <input id="p-badge" maxlength="16" placeholder="Yeni, Popüler"></label>
         </div>
+        <label id="p-days-wrap">Erişim süresi (gün) <span class="muted">(isteğe bağlı: boş = süresiz; ör. 7, 30, 90)</span>
+          <input id="p-days" type="number" min="1" max="3650" inputmode="numeric" placeholder="süresiz"></label>
+        <p class="muted small" id="p-file-help">📎 Dosya teslimi: PDF, video ya da zip'i botuna gönder, açıklamasına <b>/dosya <span id="p-file-id">ürün-kimliği</span></b> yaz. Ödemeden sonra bot dosyayı alıcıya gönderir.</p>
         <label>Özel kanal / grup ID <span class="muted">(isteğe bağlı: ödeyene tek kullanımlık davet linki, süresi bitince çıkarma)</span>
           <input id="p-channel" inputmode="numeric" maxlength="24" placeholder="-1001234567890" list="p-channels" autocomplete="off"></label>
         <datalist id="p-channels"></datalist>

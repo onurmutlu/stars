@@ -18,6 +18,7 @@
   let editing = null;  // product id being edited, or null for a new one
   let busy = false;
   let customers = { funnel: {}, customers: [] };
+  let broadcastState = null;
   let stageFilter = "";
   const STAGES = ["ziyaretçi", "sepette", "müşteri", "abone", "iade"];
 
@@ -175,6 +176,84 @@
     renderShop();
     show("shop");
     loadCustomers().catch((error) => toast(error.message));
+    loadPromos().catch(() => {});
+    loadBroadcast().catch(() => {});
+  }
+
+  // ---------------------------------------------------------------- discount codes
+  async function loadPromos() {
+    renderPromos(await api(`/panel/api/shops/${shop.id}/promos`));
+  }
+
+  function renderPromos(data) {
+    $("promos").replaceChildren(...data.promos.map((p) => {
+      const card = el("article", "card pay-item");
+      const row = el("div", "row");
+      const active = p.active && !(p.expires && p.expires * 1000 < Date.now());
+      row.append(el("h3", "", `${p.code} · %${p.percent}`), el("span", active ? "badge" : "badge off", active ? "aktif" : "kapalı"));
+      const details = [p.max_uses ? `${p.uses}/${p.max_uses} kullanım` : `${p.uses} kullanım`];
+      if (p.expires) details.push(`bitiş ${fmtDate(p.expires)}`);
+      if (p.product) details.push(p.product);
+      const foot = el("div", "row");
+      foot.append(el("span", "meta", details.join(" · ")));
+      const actions = el("div", "actions");
+      if (active) {
+        const link = el("button", "btn small ghost", "Linki paylaş");
+        const url = `https://t.me/${data.bot}?start=kod_${p.code}`;
+        link.addEventListener("click", () => openLink(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(`🎁 ${p.code} koduyla %${p.percent} indirim`)}`));
+        const off = el("button", "btn small ghost", "Kapat");
+        off.addEventListener("click", () => guarded(off, async () => {
+          renderPromos(await api(`/panel/api/shops/${shop.id}/promos/${p.code}`, { method: "DELETE" }));
+        }));
+        actions.append(link, off);
+      }
+      foot.append(actions);
+      card.append(row, foot);
+      return card;
+    }));
+  }
+
+  async function addPromo() {
+    const num = (id) => ($(id).value.trim() ? parseInt($(id).value, 10) : null);
+    const data = await api(`/panel/api/shops/${shop.id}/promos`, json("POST", {
+      code: $("promo-code").value.trim().toUpperCase(), percent: num("promo-percent"),
+      days: num("promo-days"), max_uses: num("promo-uses"),
+    }));
+    for (const id of ["promo-code", "promo-percent", "promo-days", "promo-uses"]) $(id).value = "";
+    toast("Kod oluşturuldu. Alıcılar mağazada yazabilir ya da linkle gelebilir.");
+    renderPromos(data);
+  }
+
+  // ---------------------------------------------------------------- announcements
+  async function loadBroadcast() {
+    renderBroadcast(await api(`/panel/api/shops/${shop.id}/broadcast`));
+  }
+
+  function renderBroadcast(state) {
+    broadcastState = state;
+    const wait = state.next_allowed ? ` Sonraki duyuru: ${new Date(state.next_allowed * 1000).toLocaleString("tr-TR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.` : "";
+    $("bc-info").textContent = `${fmtNum(state.audience)} kişiye gider (botunla konuşmuş, /durdur dememiş). Günde en fazla bir duyuru.${wait}`;
+    $("bc-send").disabled = Boolean(state.next_allowed) || !state.audience;
+    $("broadcasts").replaceChildren(...state.history.map((b) => {
+      const card = el("article", "card pay-item");
+      const row = el("div", "row");
+      row.append(el("h3", "", b.text.length > 60 ? b.text.slice(0, 60) + "…" : b.text),
+        el("span", b.status === "done" ? "badge" : "badge off", b.status === "done" ? "gönderildi" : (b.status === "sending" ? "gönderiliyor" : "bekliyor")));
+      const meta = [b.confirmed ? fmtDate(b.confirmed) : fmtDate(b.created), `${fmtNum(b.sent)}/${fmtNum(b.total)} ulaştı`];
+      if (b.failed) meta.push(`${fmtNum(b.failed)} ulaşmadı`);
+      card.append(row, el("span", "meta", meta.join(" · ")));
+      return card;
+    }));
+  }
+
+  async function sendBroadcast() {
+    const text = $("bc-text").value.trim();
+    if (!text) return toast("Önce duyuru metnini yaz.");
+    if (!(await confirmBox(`Bu duyuru ${fmtNum(broadcastState ? broadcastState.audience : 0)} kişiye gönderilsin mi? Geri alınamaz.`))) return;
+    const state = await api(`/panel/api/shops/${shop.id}/broadcast`, json("POST", { text }));
+    $("bc-text").value = "";
+    toast(`📣 ${fmtNum(state.queued)} kişiye gönderiliyor.`);
+    renderBroadcast(state);
   }
 
   // ---------------------------------------------------------------- customers (CRM)
@@ -303,8 +382,9 @@
     row.append(el("h3", "", p.title), el("span", "price", fmtNum(p.stars)));
     card.append(row, el("p", "", p.description));
     const foot = el("div", "row");
+    const kindText = p.kind === "subscription" ? "Aylık abonelik" : (p.access_days ? `${p.access_days} gün erişim` : "Tek seferlik");
     foot.append(el("span", p.over_limit ? "badge off" : "badge",
-      p.over_limit ? "Plan sınırı dışında, satılmıyor" : (p.kind === "subscription" ? "Aylık abonelik" : "Tek seferlik")));
+      p.over_limit ? "Plan sınırı dışında, satılmıyor" : kindText + (p.file ? " · 📎" : "") + (p.channel_id ? " · 📣" : "")));
     const actions = el("div", "actions");
     const edit = el("button", "btn small ghost", "Düzenle");
     edit.addEventListener("click", () => openProduct(p));
@@ -390,6 +470,11 @@
     $("p-category").value = p && p.category ? p.category : "";
     $("p-badge").value = p && p.badge ? p.badge : "";
     $("p-channel").value = p && p.channel_id ? String(p.channel_id) : "";
+    $("p-days").value = p && p.access_days ? String(p.access_days) : "";
+    $("p-file-id").textContent = p ? p.id : "ürün-kimliği";
+    const syncKind = () => { $("p-days-wrap").hidden = $("p-kind").value === "subscription"; };
+    $("p-kind").onchange = syncKind;
+    syncKind();
     $("p-channels").replaceChildren(...(shop.channels || []).map((c) => {
       const option = el("option");
       option.value = String(c.id);
@@ -406,6 +491,7 @@
       kind: $("p-kind").value, content: $("p-content").value.trim(), photo_url: $("p-photo").value.trim() || null,
       category: $("p-category").value.trim() || null, badge: $("p-badge").value.trim() || null,
       channel_id: $("p-channel").value.trim() || null,
+      access_days: $("p-kind").value === "subscription" ? null : ($("p-days").value.trim() || null),
     };
     const path = `/panel/api/shops/${shop.id}/products` + (editing ? `/${encodeURIComponent(editing)}` : "");
     await api(path, json(editing ? "PUT" : "POST", item));
@@ -431,6 +517,8 @@
     $("save-settings").addEventListener("click", () => guarded($("save-settings"), saveSettings));
     $("add-product").addEventListener("click", () => openProduct(null));
     $("refresh-customers").addEventListener("click", () => guarded($("refresh-customers"), loadCustomers));
+    $("promo-add").addEventListener("click", () => guarded($("promo-add"), addPromo));
+    $("bc-send").addEventListener("click", () => guarded($("bc-send"), sendBroadcast));
     $("save-product").addEventListener("click", () => guarded($("save-product"), saveProduct));
     $("resync").addEventListener("click", () => guarded($("resync"), async () => {
       shop = { ...shop, ...(await api(`/panel/api/shops/${shop.id}/sync`, { method: "POST" })) };
