@@ -801,3 +801,121 @@ def test_report_command_sends_two_csv_files_to_admins_only(client, api, store):
     assert lines[0].startswith("tarih;ürün") and ";guide;" in lines[1] and "ödendi" in lines[1]
     customers = docs[1]["files"]["document"][1].decode("utf-8-sig").splitlines()
     assert any(line.startswith(f"{BUYER};") and "müşteri" in line for line in customers)
+
+
+# ------------------------------------------------------------------ gifts, upsell, reviews, waitlist, sources
+def shop_with(api, store, products, **overrides):
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    from tests.conftest import make_settings
+    settings = make_settings(bot_username="demo_bot", **overrides)
+    return TestClient(create_app(settings, products, store, api, background=False))
+
+
+def test_gift_link_gives_the_product_to_the_first_friend_only(api, store):
+    from app.config import Product
+    products = {"kurs": Product("kurs", "Kurs", "d", 30, "Kurs linki", access_days=30, stock=5),
+                "aylik": Product("aylik", "Aylık", "d", 10, "c", kind="subscription")}
+    THIRD = 3003
+    with shop_with(api, store, products) as client:
+        assert client.post("/api/orders", json={"product_id": "aylik", "gift": True}, headers=headers()).status_code == 400
+        r = client.post("/api/orders", json={"product_id": "kurs", "gift": True}, headers=headers())
+        order_id = r.json()["order_id"]
+        assert api.of("createInvoiceLink")[-1]["title"].startswith("🎁")
+        hook(client, paid(order_id, amount=30, charge="g1"))
+        mine = [m for m in api.of("sendMessage") if m["chat_id"] == BUYER]
+        assert not any("Kurs linki" in m["text"] for m in mine)          # the giver does not get the content
+        link = mine[-1]["text"].split("start=gift_")[1].split()[0]
+        library = client.get("/api/purchases", headers=headers()).json()
+        assert library[0]["status"] == "gift" and library[0]["gift"]["claimed"] is False
+        # the giver can still buy it for themselves
+        assert client.post("/api/orders", json={"product_id": "kurs"}, headers=headers()).status_code == 200
+        hook(client, text(f"/start gift_{link}", update_id=90))
+        assert "senin aldığın" in api.of("sendMessage")[-1]["text"]
+        hook(client, text(f"/start gift_{link}", user_id=OTHER, update_id=91))
+        got = [m["text"] for m in api.of("sendMessage") if m["chat_id"] == OTHER]
+        assert any("Kurs linki" in t for t in got) and "hediye" in got[-1].lower()
+        assert any("Hediyen açıldı" in m["text"] for m in api.of("sendMessage") if m["chat_id"] == BUYER)
+        friend = client.get("/api/purchases", headers=headers(OTHER)).json()
+        assert friend[0]["status"] == "paid" and friend[0]["access_until"]   # 30 days start when opened
+        hook(client, text(f"/start gift_{link}", user_id=THIRD, update_id=92))
+        assert "başka biri" in api.of("sendMessage")[-1]["text"]
+        catalog = {p["id"]: p for p in client.get("/api/products").json()}
+        assert catalog["kurs"]["left"] == 4          # one unit, not two
+        assert store.summary(time.time() - 60, time.time() + 60)["sales"] == 1
+        store.mark_refunded("g1")                     # refunding the gift takes it back from the friend
+        assert not any(store.has_access(o) for o in store.paid_orders(OTHER))
+
+
+def test_upsell_after_purchase_sends_a_discount_code_for_the_next_product(api, store):
+    from app.config import Product
+    products = {"temel": Product("temel", "Temel", "d", 50, "c", upsell="ileri", upsell_percent=30, compare_at=80),
+                "ileri": Product("ileri", "İleri", "d ileri", 100, "c2")}
+    with shop_with(api, store, products) as client:
+        assert {p["id"]: p for p in client.get("/api/products").json()}["temel"]["compare_at"] == 80
+        hook(client, paid(order(client, "temel"), update_id=93))
+        offer = api.of("sendMessage")[-1]
+        assert "İleri" in offer["text"] and "⭐70" in offer["text"]
+        url = offer["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"]
+        code = url.split("code=")[1]
+        assert client.get("/api/quote", params={"product_id": "ileri", "code": code}).json()["stars"] == 70
+        assert client.get("/api/quote", params={"product_id": "temel", "code": code}).status_code == 400
+
+
+def test_product_upsell_and_compare_rules(tmp_path):
+    import json
+    from app.config import ConfigError, load_products
+    base = {"title": "T", "description": "d", "stars": 5, "content": "c"}
+    def load(items):
+        path = tmp_path / "p.json"
+        path.write_text(json.dumps(items))
+        return load_products(path)
+    for bad in ([base | {"id": "a", "compare_at": 5}], [base | {"id": "a", "upsell": "yok"}],
+                [base | {"id": "a", "upsell_percent": 10}], [base | {"id": "a", "upsell": "a"}]):
+        with pytest.raises(ConfigError):
+            load(bad)
+
+
+def test_reviews_only_from_buyers_with_ratings_in_catalog_and_admin_hide(client, api, store):
+    assert client.post("/api/reviews", json={"product_id": "guide", "rating": 5}, headers=headers()).status_code == 403
+    hook(client, text("/start", update_id=94))
+    hook(client, paid(order(client), update_id=95))
+    r = client.post("/api/reviews", json={"product_id": "guide", "rating": 4, "text": "Çok işime yaradı"}, headers=headers())
+    assert r.status_code == 200 and r.json()["items"][0]["name"] == "Test" and r.json()["mine"]["rating"] == 4
+    client.post("/api/reviews", json={"product_id": "guide", "rating": 5}, headers=headers())   # update, not a second one
+    assert client.get("/api/reviews", params={"product_id": "guide"}).json()["count"] == 1
+    assert {p["id"]: p for p in client.get("/api/products").json()}["guide"]["rating"] == 5.0
+    hook(client, text(f"/yorumlar gizle guide {BUYER}", user_id=ADMIN, update_id=96))
+    assert client.get("/api/reviews", params={"product_id": "guide"}).json()["count"] == 0
+
+
+def test_review_request_a_day_after_purchase_once(client, api, store):
+    hook(client, paid(order(client), update_id=97))
+    shop = client.shop
+    assert asyncio.run(shop.ask_reviews()) == 0                       # too early
+    assert asyncio.run(shop.ask_reviews(time.time() + 86400 + 5)) == 1
+    assert "review=1" in api.of("sendMessage")[-1]["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"]
+    assert asyncio.run(shop.ask_reviews(time.time() + 86400 + 10)) == 0
+
+
+def test_waitlist_is_told_when_stock_comes_back(api, store):
+    from app.config import Product
+    products = {"az": Product("az", "Az", "d", 10, "c", stock=1)}
+    with shop_with(api, store, products) as client:
+        assert client.post("/api/waitlist", json={"product_id": "az"}, headers=headers(OTHER)).status_code == 409
+        hook(client, paid(order(client, "az"), amount=10, charge="w1", update_id=98))
+        assert client.post("/api/waitlist", json={"product_id": "az"}, headers=headers(OTHER)).json() == {"waiting": True}
+        assert asyncio.run(client.app.state.shop.notify_waitlist()) == 0
+        store.mark_refunded("w1")                                       # a unit is free again
+        assert asyncio.run(client.app.state.shop.notify_waitlist()) == 1
+        assert "yeniden satışta" in api.of("sendMessage")[-1]["text"] and api.of("sendMessage")[-1]["chat_id"] == OTHER
+        assert asyncio.run(client.app.state.shop.notify_waitlist()) == 0
+
+
+def test_sources_command_groups_first_touch(client, api, store):
+    hook(client, text("/start instagram", update_id=99))
+    hook(client, text("/start ref_5", user_id=OTHER, update_id=100))
+    hook(client, paid(order(client), update_id=101))
+    hook(client, text("/kaynaklar", user_id=ADMIN, update_id=102))
+    reply = api.of("sendMessage")[-1]["text"]
+    assert "instagram: 1 · 1 · ⭐50 · %100.0" in reply and "davet: 1 · 0" in reply

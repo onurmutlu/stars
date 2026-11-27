@@ -73,6 +73,9 @@ CREATE TABLE IF NOT EXISTS products(
     includes TEXT,
     stock INTEGER,
     sale_until REAL,
+    compare_at INTEGER,
+    upsell TEXT,
+    upsell_percent INTEGER,
     position INTEGER NOT NULL DEFAULT 0,
     archived INTEGER NOT NULL DEFAULT 0,
     updated REAL NOT NULL,
@@ -184,7 +187,8 @@ class Registry:
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(products)")}
         for column, kind in (("category", "TEXT"), ("badge", "TEXT"), ("channel_id", "INTEGER"),
                              ("access_days", "INTEGER"), ("includes", "TEXT"),
-                             ("stock", "INTEGER"), ("sale_until", "REAL")):
+                             ("stock", "INTEGER"), ("sale_until", "REAL"), ("compare_at", "INTEGER"),
+                             ("upsell", "TEXT"), ("upsell_percent", "INTEGER")):
             if column not in columns:  # databases created before these fields
                 self.db.execute(f"ALTER TABLE products ADD COLUMN {column} {kind}")
         if "referral_percent" not in {row[1] for row in self.db.execute("PRAGMA table_info(tenants)")}:
@@ -313,6 +317,8 @@ class Registry:
         product = validate_product(item)
         others = {pid: p for pid, p in self.catalog(tenant_id, 10**6).items() if pid != product.id}
         check_bundles(others | {product.id: product})
+        if product.upsell and product.upsell not in others:
+            raise ConfigError(f"Önerilen ürün bulunamadı: {product.upsell}")
         for other in others.values():
             if product.id in other.includes and (product.kind == "subscription" or product.includes):
                 raise ConfigError(f"'{product.id}' '{other.id}' paketinde; paketteki ürün abonelik ya da paket olamaz")
@@ -331,18 +337,20 @@ class Registry:
         with self.db:
             self.db.execute(
                 "INSERT INTO products(tenant,id,title,description,stars,content,kind,photo_url,category,badge,channel_id,"
-                "access_days,includes,stock,sale_until,position,archived,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?) "
+                "access_days,includes,stock,sale_until,compare_at,upsell,upsell_percent,position,archived,updated) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?) "
                 "ON CONFLICT(tenant,id) DO UPDATE SET "
                 "title=excluded.title, description=excluded.description, stars=excluded.stars, "
                 "content=excluded.content, kind=excluded.kind, photo_url=excluded.photo_url, "
                 "category=excluded.category, badge=excluded.badge, channel_id=excluded.channel_id, "
                 "access_days=excluded.access_days, includes=excluded.includes, stock=excluded.stock, "
-                "sale_until=excluded.sale_until, archived=0, "
+                "sale_until=excluded.sale_until, compare_at=excluded.compare_at, upsell=excluded.upsell, "
+                "upsell_percent=excluded.upsell_percent, archived=0, "
                 "updated=excluded.updated, position=COALESCE(?, products.position)",
                 (tenant_id, product.id, product.title, product.description, product.stars, product.content,
                  product.kind, product.photo_url, product.category, product.badge, product.channel_id,
                  product.access_days, ",".join(product.includes) or None, product.stock, product.sale_until,
-                 position or 0, time.time(), position),
+                 product.compare_at, product.upsell, product.upsell_percent, position or 0, time.time(), position),
             )
         return product
 
@@ -359,7 +367,7 @@ class Registry:
         return {r["id"]: Product(r["id"], r["title"], r["description"], r["stars"], r["content"],
                                  r["kind"], r["photo_url"], r["category"], r["badge"], r["channel_id"],
                                  r["access_days"], tuple(filter(None, (r["includes"] or "").split(","))),
-                                 r["stock"], r["sale_until"])
+                                 r["stock"], r["sale_until"], r["compare_at"], r["upsell"], r["upsell_percent"])
                 for r in rows}
 
     # runtime settings ------------------------------------------------------------

@@ -19,6 +19,7 @@ import logging
 import re
 import secrets
 import time
+from types import SimpleNamespace
 from typing import Awaitable, Callable
 
 from .config import SUBSCRIPTION_PERIOD, Product, Settings
@@ -51,6 +52,11 @@ def _attached_file(message: dict) -> tuple[str, str, str | None] | None:
     if message.get("photo"):
         return "photo", message["photo"][-1]["file_id"], None
     return None
+
+
+def _quote(text: str) -> str:
+    from urllib.parse import quote
+    return quote(text, safe="")
 
 
 def _who(user: dict) -> str:
@@ -86,13 +92,16 @@ class StarsShop:
         if not self.settings.sales_enabled:
             return []
         files = self.store.product_files()
+        ratings = self.store.ratings()
         now = time.time()
         items = []
         for p in self.products.values():
             if p.sale_until and now > p.sale_until:
                 continue  # closed sales disappear from the shop; buyers keep their purchases
             reason, left = self.availability(p, now)
-            items.append(p.public() | {"file": files.get(p.id, {}).get("kind"), "left": left, "sold_out": left == 0})
+            rating, reviews = ratings.get(p.id, (None, 0))
+            items.append(p.public() | {"file": files.get(p.id, {}).get("kind"), "left": left, "sold_out": left == 0,
+                                       "rating": rating, "reviews": reviews})
         return items
 
     def quote(self, product_id: str, code: str | None) -> dict:
@@ -116,26 +125,29 @@ class StarsShop:
         return {"product": product.id, "stars": stars, "original": product.stars, "percent": promo["percent"],
                 "code": promo["code"]}
 
-    async def create_invoice(self, user: int, product_id: str, code: str | None = None) -> dict:
+    async def create_invoice(self, user: int, product_id: str, code: str | None = None, gift: bool = False) -> dict:
         if not self.settings.sales_enabled:
             raise ShopError("Satış şu an kapalı.", 403)
         product = self.products.get(product_id)
         if not product:
             raise ShopError("Ürün bulunamadı.", 404)
-        if self._owns(user, product.id):
+        if gift and product.kind == "subscription":
+            raise ShopError("Abonelik hediye edilemez; tek seferlik ürünleri hediye edebilirsin.")
+        if not gift and self._owns(user, product.id):
             raise ShopError("Bu ürün zaten sende. 'Satın aldıklarım' bölümünden açabilirsin.", 409)
         reason, _ = self.availability(product)
         if reason:
             raise ShopError(reason, 409)
         price = self.quote(product.id, code)
-        order_id = self.store.create_order(user, product, stars=price["stars"], promo=price["code"])
+        order_id = self.store.create_order(user, product, stars=price["stars"], promo=price["code"], gift=gift)
         extra = {"subscription_period": SUBSCRIPTION_PERIOD} if product.kind == "subscription" else {}
         if product.photo_url:
             extra["photo_url"] = product.photo_url
         link = await self.api(
             "createInvoiceLink",
-            title=product.title,
-            description=product.description,
+            title=("🎁 " + product.title)[:32] if gift else product.title,
+            description=("Hediye: ödemeden sonra arkadaşına göndereceğin bir link alırsın. " + product.description)[:255]
+            if gift else product.description,
             payload=order_id,
             currency="XTR",
             prices=[{"label": product.title + (f" ({price['code']} -%{price['percent']})" if price["code"] else ""),
@@ -151,11 +163,31 @@ class StarsShop:
         return self._view(order)
 
     def purchases(self, user: int) -> list[dict]:
-        return [self._view(o) for o in self.store.paid_orders(user)]
+        own = [self._view(o) for o in self.store.paid_orders(user)]
+        gifts = []
+        for g in self.store.gift_orders(user):
+            if not g["paid"]:
+                continue
+            refunded = not self.store.live_payments(g["id"])
+            gifts.append({"order_id": g["id"], "product": g["product"], "title": g["title"], "kind": g["kind"],
+                          "stars": g["stars"], "status": "gift",
+                          "gift": {"link": None if refunded else self.gift_link(g["code"]),
+                                   "claimed": g["claimed_by"] is not None, "refunded": refunded}})
+        return own + gifts
+
+    def gift_link(self, code: str) -> str | None:
+        return f"https://t.me/{self.settings.bot_username}?start=gift_{code}" if self.settings.bot_username else None
 
     def _view(self, order) -> dict:
         view = {"order_id": order["id"], "product": order["product"], "title": order["title"],
                 "kind": order["kind"], "stars": order["stars"]}
+        if order["gift"]:
+            gift = self.store.gift_for_order(order["id"])
+            view["status"] = "gift" if gift and self.store.live_payments(order["id"]) else \
+                ("refunded" if order["paid"] else "pending")
+            if gift:
+                view["gift"] = {"link": self.gift_link(gift["code"]), "claimed": gift["claimed_by"] is not None}
+            return view
         if self.store.has_access(order):
             view["status"] = "paid"
             view["content"] = order["content"]
@@ -360,7 +392,7 @@ class StarsShop:
     async def tick(self, now: float | None = None) -> None:
         """Background work, once a minute: deliveries, channel removals, daily summary."""
         for job in (self.redeliver, self.sweep_channels, self.daily_summary, self.remind_carts, self.warn_expiring,
-                    self.notify_expired, self.send_broadcasts):
+                    self.notify_expired, self.send_broadcasts, self.ask_reviews, self.notify_waitlist):
             try:
                 await job(now)
             except Exception as exc:  # noqa: BLE001 - one job must not stop the others
@@ -703,6 +735,8 @@ class StarsShop:
             issue("order_already_paid")  # a second charge for a one-time order: refund it
             log.error("Tek seferlik sipariş ikinci kez ödendi: order=%s charge=%s", order["id"], charge)
             return
+        elif order["gift"]:
+            expires = None  # the clock starts when the friend opens the gift
         elif order["access_days"]:
             # an extension bought in the last days continues from the current end, not from today
             start = max(time.time(), self.store.active_until(user, order["product"], exclude=order["id"]) or 0)
@@ -711,9 +745,12 @@ class StarsShop:
         self.store.add_payment(charge, order, expires, bool(payment.get("is_recurring")))
         if order["promo"] and not renewal:
             self.store.count_promo_use(order["promo"])
-        await self._grant_bundle(user, order, charge)
         if order["stars"] > 0 and self.store.paid_count(user) == 1:
             await self._reward_referrer(user)
+        if order["gift"]:
+            await self._gift_paid(order, sender)
+            return
+        await self._grant_bundle(user, order, charge)
         if order["channel"]:
             self.store.reopen_channel(order["id"])
         await self.try_deliver(self.store.order(order["id"]))
@@ -722,6 +759,8 @@ class StarsShop:
                 else "💰 Yeni satış"
             until = f"\nBitiş: {time.strftime('%d.%m.%Y', time.localtime(expires))}" if expires else ""
             await self.notify_admins(f"{kind}: {order['title']} · ⭐{order['stars']}\nAlıcı: {_who(sender or {'id': user})}{until}")
+        if not renewal:
+            await self._offer_upsell(user, order)
 
     def reports(self) -> dict[str, bytes]:
         """satislar.csv and musteriler.csv, UTF-8 with BOM and ';' so Excel opens Turkish text correctly."""
@@ -753,6 +792,170 @@ class StarsShop:
         for name, body in self.reports().items():
             await self.api("sendDocument", chat_id=chat_id, files={"document": (f"{stamp}-{name}", body)},
                            caption=f"{self.settings.shop_name} · {name.removesuffix('.csv')}")
+
+    # ------------------------------------------------------------------ gifts
+    async def _gift_paid(self, order, sender: dict | None) -> None:
+        code = secrets.token_urlsafe(9).replace("-", "").replace("_", "").upper()[:10]
+        self.store.create_gift(code, order)
+        code = self.store.gift_for_order(order["id"])["code"]
+        link = self.gift_link(code)
+        text = (f"🎁 Hediyen hazır: {order['title']}\nBu linki hediye etmek istediğin kişiye gönder. Linki ilk açan "
+                f"kişi ürünü alır, tek kullanımlık:\n{link}") if link else \
+            f"🎁 Hediyen hazır: {order['title']}. Hediye kodu: {code} (botta /start gift_{code})"
+        extra = {}
+        if link:
+            share = f"https://t.me/share/url?url={_quote(link)}&text={_quote('Sana bir hediyem var 🎁 ' + order['title'])}"
+            extra = {"reply_markup": {"inline_keyboard": [[{"text": "📤 Hediyeyi gönder", "url": share}]]}}
+        try:
+            await self.api("sendMessage", chat_id=order["user"], text=text, disable_web_page_preview=True, **extra)
+        except TelegramError as exc:
+            log.warning("Hediye linki gönderilemedi: %s", exc.description)
+        if self.settings.notify_sales:
+            await self.notify_admins(f"🎁 Hediye satışı: {order['title']} · ⭐{order['stars']}\n"
+                                     f"Alan: {_who(sender or {'id': order['user']})}")
+
+    async def claim_gift(self, user: int, code: str, sender: dict | None = None) -> str:
+        """Give the gifted product to the first person who opens the link. Returns the reply text."""
+        gift = self.store.gift(code)
+        if not gift:
+            return "Bu hediye linki geçersiz."
+        order = self.store.order(gift["order_id"])
+        payments = self.store.live_payments(order["id"])
+        if not payments:
+            return "Bu hediye iptal edilmiş."
+        if gift["claimed_by"] == user:
+            return "Bu hediye zaten sende. İçeriği tekrar almak için /orders yaz."
+        if gift["claimed_by"] is not None:
+            return "Bu hediye başka biri tarafından açılmış."
+        if gift["giver"] == user:
+            return "Bu senin aldığın hediye 🙂 Linki hediye etmek istediğin kişiye gönder."
+        if self._owns(user, order["product"]):
+            return "Bu ürün zaten sende. Hediyeyi açmadım; linki başka birine verebilirsin."
+        item = SimpleNamespace(id=order["product"], kind=order["kind"], title=order["title"], content=order["content"],
+                               channel_id=order["channel"], access_days=order["access_days"])
+        claim_order = self.store.create_order(user, item, stars=0)
+        if not self.store.claim_gift(gift["code"], user, claim_order):
+            return "Bu hediye başka biri tarafından açılmış."
+        expires = None
+        if order["access_days"]:
+            start = max(time.time(), self.store.active_until(user, order["product"], exclude=claim_order) or 0)
+            expires = int(start) + int(order["access_days"]) * 86400
+        charge = f"{payments[0]['charge']}:gift"
+        self.store.add_payment(charge, self.store.order(claim_order), expires, False)
+        await self._grant_bundle(user, self.store.order(claim_order), charge)
+        await self.try_deliver(self.store.order(claim_order))
+        with contextlib.suppress(Exception):
+            await self.api("sendMessage", chat_id=gift["giver"],
+                           text=f"🎁 Hediyen açıldı: {order['title']} → {_who(sender or {'id': user})}")
+        return f"🎁 Sana bir hediye var: {order['title']}! İçeriğin bu sohbete gönderildi."
+
+    # ------------------------------------------------------------------ upsell
+    async def _offer_upsell(self, user: int, order) -> None:
+        product = self.products.get(order["product"])
+        target = self.products.get(product.upsell) if product and product.upsell else None
+        if not target or self._owns(user, target.id) or self.availability(target)[0]:
+            return
+        price, extra = target.stars, ""
+        target_url = f"{self.settings.webapp_url}/app?p={target.id}"
+        if product.upsell_percent and target.kind != "subscription":
+            code = "UP" + secrets.token_hex(3).upper()
+            self.store.save_promo(code, product.upsell_percent, product=target.id, max_uses=1,
+                                  expires=time.time() + 48 * 3600)
+            price = max(1, -(-target.stars * (100 - product.upsell_percent) // 100))
+            extra = f" yerine ⭐{price} (%{product.upsell_percent} indirim, 48 saat geçerli, kod: {code})"
+            target_url += f"&code={code}"
+        try:
+            await self.api("sendMessage", chat_id=user,
+                           text=f"✨ Bunu da seveceğini düşündük: {target.title}\n{target.description}\n"
+                                f"⭐{target.stars}{extra}",
+                           reply_markup={"inline_keyboard": [[{"text": f"🛍 İncele · ⭐{price}",
+                                                               "web_app": {"url": target_url}}]]})
+        except TelegramError as exc:
+            log.info("Öneri gönderilemedi: %s", exc.description)
+
+    # ------------------------------------------------------------------ reviews
+    def can_review(self, user: int, product_id: str) -> bool:
+        return any(o["product"] == product_id and self.store.live_payments(o["id"])
+                   for o in self.store.paid_orders(user))
+
+    def reviews(self, product_id: str, viewer: int | None = None) -> dict:
+        items = self.store.reviews(product_id, limit=20)
+        mine = self.store.review(product_id, viewer) if viewer else None
+        average, count = self.store.ratings().get(product_id, (None, 0))
+        return {"average": average, "count": count,
+                "items": [{"rating": r["rating"], "text": r["text"], "name": r["name"] or "Alıcı",
+                           "created": r["created"]} for r in items],
+                "can_review": bool(viewer) and self.can_review(viewer, product_id),
+                "mine": {"rating": mine["rating"], "text": mine["text"]} if mine else None}
+
+    def add_review(self, user: int, product_id: str, rating: int, text: str | None) -> dict:
+        if product_id not in self.products and not self.store.paid_orders(user):
+            raise ShopError("Ürün bulunamadı.", 404)
+        if not self.can_review(user, product_id):
+            raise ShopError("Yalnızca satın aldığın ürünlere puan verebilirsin.", 403)
+        if not 1 <= rating <= 5:
+            raise ShopError("Puan 1 ile 5 arasında olmalı.")
+        contact = self.store.contact(user)
+        name = None
+        if contact and contact["name"]:
+            parts = contact["name"].split()
+            name = parts[0] + (f" {parts[1][0]}." if len(parts) > 1 else "")
+        self.store.save_review(product_id, user, rating, text, name)
+        return self.reviews(product_id, user)
+
+    async def ask_reviews(self, now: float | None = None) -> int:
+        """A day after a purchase, one message asking for a rating (orders older than a week are skipped)."""
+        if not self.settings.review_request:
+            return 0
+        now = time.time() if now is None else now
+        sent = 0
+        for order in self.store.review_candidates(now - 86400, now - 7 * 86400)[:50]:
+            self.store.mark_review_requested(order["id"])
+            if order["product"] not in self.products or self.store.review(order["product"], order["user"]):
+                continue
+            try:
+                await self.api("sendMessage", chat_id=order["user"],
+                               text=f"'{order['title']}' nasıldı? Bir puan bırakırsan diğer alıcılara çok yardımcı olur ⭐",
+                               reply_markup={"inline_keyboard": [[{"text": "⭐ Puan ver",
+                                                                   "web_app": {"url": f"{self.settings.webapp_url}/app?p={order['product']}&review=1"}}]]})
+                sent += 1
+            except Exception as exc:  # noqa: BLE001
+                log.info("Yorum isteği gönderilemedi: %s", type(exc).__name__)
+        return sent
+
+    # ------------------------------------------------------------------ waitlist
+    def join_waitlist(self, user: int, product_id: str) -> dict:
+        product = self.products.get(product_id)
+        if not product:
+            raise ShopError("Ürün bulunamadı.", 404)
+        if not self.availability(product)[0] == "Bu ürün tükendi.":
+            raise ShopError("Bu ürün şu an satın alınabilir.", 409)
+        self.store.join_waitlist(product_id, user)
+        return {"waiting": True}
+
+    async def notify_waitlist(self, now: float | None = None) -> int:
+        """When a sold-out product can be bought again (stock raised, refund), tell everyone who waited."""
+        if not self.settings.sales_enabled:
+            return 0
+        sent = 0
+        for product_id, _count in self.store.waitlist_counts().items():
+            product = self.products.get(product_id)
+            if not product or self.availability(product, now)[0]:
+                continue
+            users = self.store.waiting(product_id)[:200]
+            for user in users:
+                if self._owns(user, product_id):
+                    continue
+                try:
+                    await self.api("sendMessage", chat_id=user,
+                                   text=f"🔔 '{product.title}' yeniden satışta! Stok sınırlı, kaçırma.",
+                                   reply_markup={"inline_keyboard": [[{"text": f"🛍 Al · ⭐{product.stars}",
+                                                                       "web_app": {"url": f"{self.settings.webapp_url}/app?p={product.id}"}}]]})
+                    sent += 1
+                except Exception as exc:  # noqa: BLE001
+                    log.info("Bekleme listesi bildirimi gönderilemedi: %s", type(exc).__name__)
+            self.store.leave_waitlist(product_id, users)
+        return sent
 
     def referral_link(self, user: int) -> str | None:
         if not self.settings.referral_percent or not self.settings.bot_username:
@@ -856,6 +1059,27 @@ class StarsShop:
             reply = "Duyuru iptal edildi." if self.store.cancel_broadcast() else "İptal edilecek duyuru yok."
         elif command in ("/kod", "/code") and user in self.settings.admin_ids:
             reply = self._promo_command(argument)
+        elif command == "/start" and argument.lower().startswith("gift_"):
+            contact = self.store.contact(user)
+            who = {"id": user, "first_name": contact["name"] if contact else None,
+                   "username": contact["username"] if contact else None}
+            reply = await self.claim_gift(user, argument[5:], who)
+        elif command in ("/yorumlar", "/reviews") and user in self.settings.admin_ids:
+            parts = argument.split()
+            if len(parts) == 3 and parts[0] in ("gizle", "goster", "göster") and parts[2].isdigit():
+                ok = self.store.hide_review(parts[1], int(parts[2]), parts[0] == "gizle")
+                reply = "Tamam." if ok else "Bu yorum bulunamadı."
+            else:
+                rows = self.store.reviews(limit=15, include_hidden=True)
+                lines = [f"{'🙈 ' if r['hidden'] else ''}{'⭐' * r['rating']} {r['product']} · {r['name'] or r['user']}"
+                         + (f": {r['text'][:80]}" if r["text"] else "") + f"\n   /yorumlar {'goster' if r['hidden'] else 'gizle'} "
+                         f"{r['product']} {r['user']}" for r in rows]
+                reply = "Son yorumlar\n" + "\n".join(lines) if rows else "Henüz yorum yok."
+        elif command in ("/kaynaklar", "/sources") and user in self.settings.admin_ids:
+            rows = self.store.source_stats()
+            reply = "📈 Kaynaklar (kişi · alıcı · ⭐ · dönüşüm)\n" + "\n".join(
+                f"• {r['source']}: {r['people']} · {r['buyers']} · ⭐{r['stars']} · %{r['conversion']}" for r in rows[:20]) \
+                if rows else "Henüz veri yok. Linklerine ?start=instagram gibi bir kaynak ekle."
         elif command == "/start" and argument.lower().startswith("kod_"):
             code = argument[4:]
             try:
@@ -893,7 +1117,7 @@ class StarsShop:
                 rows.append([{"text": "🔑 Lisans yönetimi", "url": self.settings.buy_url}])
             rows.append([{"text": "🛍 Mağazayı aç", "web_app": {"url": self.settings.webapp_url + "/app"}}])
             await self.api("sendMessage", chat_id=user,
-                           text="Yönetim\nMüşteriler: /musteriler · İade: /refund <charge_id> · Ödeme sorunları: /issues · CSV rapor: /rapor\n"
+                           text="Yönetim\nMüşteriler: /musteriler · İade: /refund <charge_id> · Ödeme sorunları: /issues · CSV rapor: /rapor\nKaynaklar: /kaynaklar · Yorumlar: /yorumlar\n"
                                 "Müşteri mesajları buraya gelir; cevaplamak için yanıtla.",
                            reply_markup={"inline_keyboard": rows})
             return

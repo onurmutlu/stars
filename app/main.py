@@ -33,6 +33,17 @@ def _mtime(path) -> float | None:
 class OrderRequest(BaseModel):
     product_id: str = Field(min_length=1, max_length=32)
     code: str | None = Field(None, max_length=24)
+    gift: bool = False
+
+
+class ReviewRequest(BaseModel):
+    product_id: str = Field(min_length=1, max_length=32)
+    rating: int = Field(ge=1, le=5)
+    text: str | None = Field(None, max_length=500)
+
+
+class WaitRequest(BaseModel):
+    product_id: str = Field(min_length=1, max_length=32)
 
 
 def create_app(settings: Settings | None = None, products: dict[str, Product] | None = None,
@@ -137,7 +148,7 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
         user = user_id(x_telegram_init_data)
         refresh_products()
         try:
-            return await shop.create_invoice(user, body.product_id, body.code)
+            return await shop.create_invoice(user, body.product_id, body.code, body.gift)
         except TelegramError as exc:
             log.error("Fatura oluşturulamadı: %s", exc.description)
             raise HTTPException(502, "Fatura oluşturulamadı, biraz sonra tekrar dene.") from None
@@ -149,6 +160,23 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
     @app.get("/api/purchases")
     async def purchases(x_telegram_init_data: str | None = Header(None)):
         return shop.purchases(user_id(x_telegram_init_data))
+
+    @app.get("/api/reviews")
+    async def reviews(product_id: str, x_telegram_init_data: str | None = Header(None)):
+        viewer = None
+        if x_telegram_init_data:
+            with contextlib.suppress(HTTPException):
+                viewer = user_id(x_telegram_init_data)
+        return shop.reviews(product_id, viewer)
+
+    @app.post("/api/reviews")
+    async def add_review(body: ReviewRequest, x_telegram_init_data: str | None = Header(None)):
+        return shop.add_review(user_id(x_telegram_init_data), body.product_id, body.rating, body.text)
+
+    @app.post("/api/waitlist")
+    async def waitlist(body: WaitRequest, x_telegram_init_data: str | None = Header(None)):
+        refresh_products()
+        return shop.join_waitlist(user_id(x_telegram_init_data), body.product_id)
 
     @app.post("/telegram/webhook")
     async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(None)):

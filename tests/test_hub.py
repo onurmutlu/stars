@@ -221,6 +221,19 @@ def test_referral_percent_is_a_shop_setting(hub_client):
     assert hub_client.get(f"/s/{tenant['username']}/api/config").json()["referral_percent"] == 10
 
 
+def test_panel_sources_and_review_moderation(hub_client):
+    shop = ready_shop(hub_client)
+    url = f"/panel/api/shops/{shop['id']}"
+    store = hub_client.hub.store_for(shop["id"])
+    store.touch_contact({"id": BUYER}, "instagram")
+    store.save_review("guide", BUYER, 5, "süper", "Ali")
+    assert hub_client.get(f"{url}/sources", headers=panel()).json()[0]["source"] == "instagram"
+    assert hub_client.get(f"{url}/reviews", headers=panel()).json()[0]["text"] == "süper"
+    assert hub_client.put(f"{url}/reviews/guide/{BUYER}", json={"hidden": True}, headers=panel()).status_code == 200
+    assert store.reviews("guide") == []
+    assert hub_client.get(f"{url}/sources", headers=panel(SELLER2)).status_code == 404
+
+
 def test_owner_isolation_in_panel(hub_client):
     shop = ready_shop(hub_client)
     url = f"/panel/api/shops/{shop['id']}"
@@ -375,6 +388,9 @@ def test_existing_backend_requires_confirmation_then_forwards(hub_client, world)
         "id": "q2", "from": {"id": BUYER}, "currency": "XTR", "total_amount": 50, "invoice_payload": order_id}})
     tenant_hook(hub_client, shop["id"], paid_update(order_id, BUYER, 50, "ch-f"))
     assert not world.forwarded and bot.of("answerPreCheckoutQuery")[-1]["ok"] is True
+    # shop deep links (gift, invite, campaign, product) stay with the shop; a plain /start goes to the backend
+    tenant_hook(hub_client, shop["id"], text_update("/start gift_YOK", BUYER))
+    assert not world.forwarded and "geçersiz" in bot.of("sendMessage")[-1]["text"]
 
     # removing the shop gives the bot its old webhook back
     assert hub_client.delete(f"/panel/api/shops/{shop['id']}", headers=panel()).status_code == 200

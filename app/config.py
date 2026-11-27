@@ -35,6 +35,9 @@ class Product:
     includes: tuple[str, ...] = () # bundle: buying this also gives these one-time products
     stock: int | None = None       # at most this many sales ("ilk 50 kişi")
     sale_until: float | None = None # sales close at this moment (server time); "2026-12-05" means end of that day
+    compare_at: int | None = None  # old price shown struck through (must be above stars)
+    upsell: str | None = None      # after paying, the buyer is offered this product...
+    upsell_percent: int | None = None  # ...with this discount (a one-use code, 48 hours)
 
     def public(self) -> dict:
         """What the Mini App may see before payment: never the content."""
@@ -52,6 +55,7 @@ class Product:
             "includes": list(self.includes),
             "stock": self.stock,
             "sale_until": self.sale_until,
+            "compare_at": self.compare_at,
         }
 
 def _optional_text(value):
@@ -124,6 +128,9 @@ def validate_product(item: dict) -> Product:
         includes=_id_list(item.get("includes")),
         stock=_optional_int(item.get("stock")),
         sale_until=_moment(item.get("sale_until")),
+        compare_at=_optional_int(item.get("compare_at")),
+        upsell=(_optional_text(item.get("upsell")) or None) and str(item.get("upsell")).strip().lower(),
+        upsell_percent=_optional_int(item.get("upsell_percent")),
     )
     if not isinstance(product.id, str) or not PRODUCT_ID.match(product.id):
         raise ConfigError(f"Geçersiz ürün id: {product.id!r} (a-z, 0-9, _ ve -; en fazla 32)")
@@ -158,6 +165,18 @@ def validate_product(item: dict) -> Product:
         raise ConfigError(f"{product.id}: stok 1 ile 1.000.000 arasında olmalı")
     if product.sale_until is not None and not isinstance(product.sale_until, float):
         raise ConfigError(f"{product.id}: satış bitişi 2026-12-05 ya da 2026-12-05 18:00 biçiminde olmalı")
+    if product.compare_at is not None and (not isinstance(product.compare_at, int) or isinstance(product.compare_at, bool)
+                                           or not product.stars < product.compare_at <= 1_000_000):
+        raise ConfigError(f"{product.id}: eski fiyat satış fiyatından büyük olmalı")
+    if product.upsell is not None:
+        if not PRODUCT_ID.match(product.upsell) or product.upsell == product.id:
+            raise ConfigError(f"{product.id}: önerilen ürün başka bir ürünün kimliği olmalı")
+    if product.upsell_percent is not None:
+        if not isinstance(product.upsell_percent, int) or isinstance(product.upsell_percent, bool) \
+                or not 1 <= product.upsell_percent <= 90:
+            raise ConfigError(f"{product.id}: öneri indirimi 1–90 arası olmalı")
+        if product.upsell is None:
+            raise ConfigError(f"{product.id}: öneri indirimi için önerilen ürünü de seç")
     if product.includes:
         if not isinstance(product.includes, tuple) or len(product.includes) > 10 or len(set(product.includes)) != len(product.includes):
             raise ConfigError(f"{product.id}: paket en fazla 10 farklı ürün kimliği içerebilir")
@@ -191,6 +210,9 @@ def load_products(path: str | Path) -> dict[str, Product]:
             raise ConfigError(f"Tekrarlanan ürün id: {product.id}")
         products[product.id] = product
     check_bundles(products)
+    for product in products.values():
+        if product.upsell and product.upsell not in products:
+            raise ConfigError(f"{product.id}: önerilen ürün bulunamadı: {product.upsell}")
     return products
 
 
@@ -221,6 +243,7 @@ class Settings:
     notify_sales: bool = True           # DM admins on every sale, renewal and refund
     summary_hour: int = 9               # local hour of the daily summary to admins; -1 turns it off
     cart_reminder: bool = True          # one reminder to a buyer who left an order unpaid for an hour
+    review_request: bool = True         # a day after a purchase, ask the buyer for a rating
     referral_percent: int = 0           # 1..90: a buyer whose friend makes a first purchase gets a code; 0 = off
 
     @classmethod
@@ -249,6 +272,7 @@ class Settings:
             notify_sales=os.getenv("NOTIFY_SALES", "true").strip().lower() not in ("0", "false", "no", "off"),
             summary_hour=int(os.getenv("DAILY_SUMMARY_HOUR", "9")),
             cart_reminder=os.getenv("CART_REMINDER", "true").strip().lower() not in ("0", "false", "no", "off"),
+            review_request=os.getenv("REVIEW_REQUEST", "true").strip().lower() not in ("0", "false", "no", "off"),
             referral_percent=max(0, min(90, int(os.getenv("REFERRAL_PERCENT", "0") or 0))),
             checkout_urls=tuple(
                 (plan, url.strip())

@@ -73,6 +73,19 @@ CREATE TABLE IF NOT EXISTS product_files(
 -- one reward per referred buyer: the referrer gets a single-use code after the friend's first paid order
 CREATE TABLE IF NOT EXISTS referral_rewards(
     referred INTEGER PRIMARY KEY, referrer INTEGER NOT NULL, code TEXT NOT NULL, created REAL NOT NULL);
+-- a gift: the giver paid order_id; whoever opens t.me/<bot>?start=gift_<code> first gets the product
+CREATE TABLE IF NOT EXISTS gifts(
+    code TEXT PRIMARY KEY, order_id TEXT NOT NULL UNIQUE, giver INTEGER NOT NULL, product TEXT NOT NULL,
+    created REAL NOT NULL, claimed_by INTEGER, claimed_at REAL, claim_order TEXT);
+-- one review per buyer and product; the admin can hide one
+CREATE TABLE IF NOT EXISTS reviews(
+    product TEXT NOT NULL, user INTEGER NOT NULL, rating INTEGER NOT NULL, text TEXT, name TEXT,
+    created REAL NOT NULL, hidden INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(product, user));
+-- people waiting for a sold-out product
+CREATE TABLE IF NOT EXISTS waitlist(
+    product TEXT NOT NULL, user INTEGER NOT NULL, created REAL NOT NULL, PRIMARY KEY(product, user));
+-- the one review request per order, sent a day after the purchase
+CREATE TABLE IF NOT EXISTS review_requests(order_id TEXT PRIMARY KEY, sent REAL NOT NULL);
 -- channels and groups the bot was made admin of (from my_chat_member updates)
 CREATE TABLE IF NOT EXISTS channels(
     id INTEGER PRIMARY KEY, title TEXT, type TEXT, status TEXT, can_invite INTEGER, can_restrict INTEGER, updated REAL);
@@ -90,7 +103,8 @@ class Store:
             self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(orders)")}
-        for column, kind in (("channel", "INTEGER"), ("access_days", "INTEGER"), ("promo", "TEXT")):
+        for column, kind in (("channel", "INTEGER"), ("access_days", "INTEGER"), ("promo", "TEXT"),
+                             ("gift", "INTEGER NOT NULL DEFAULT 0")):
             if column not in columns:  # databases from before these fields
                 self.db.execute(f"ALTER TABLE orders ADD COLUMN {column} {kind}")
         contact_columns = {row[1] for row in self.db.execute("PRAGMA table_info(contacts)")}
@@ -100,15 +114,16 @@ class Store:
         self.db.commit()
 
     # orders -----------------------------------------------------------------
-    def create_order(self, user: int, product, stars: int | None = None, promo: str | None = None) -> str:
+    def create_order(self, user: int, product, stars: int | None = None, promo: str | None = None,
+                     gift: bool = False) -> str:
         order_id = uuid.uuid4().hex
         with self.db:
             self.db.execute(
-                "INSERT INTO orders(id,user,product,kind,title,stars,content,created,channel,access_days,promo) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO orders(id,user,product,kind,title,stars,content,created,channel,access_days,promo,gift) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (order_id, user, product.id, product.kind, product.title, stars if stars is not None else product.stars,
                  product.content, time.time(), getattr(product, "channel_id", None), getattr(product, "access_days", None),
-                 promo),
+                 promo, int(gift)),
             )
         return order_id
 
@@ -125,6 +140,9 @@ class Store:
                 (charge, order["id"], order["user"], order["stars"], time.time(), expires, int(recurring)),
             )
             self.db.execute("UPDATE orders SET paid=1 WHERE id=?", (order["id"],))
+
+    def payment_exists_for(self, order_id: str) -> bool:
+        return self.db.execute("SELECT 1 FROM payments WHERE order_id=?", (order_id,)).fetchone() is not None
 
     def live_payments(self, order_id: str):
         return self.db.execute(
@@ -178,12 +196,116 @@ class Store:
         """Paid, unrefunded orders of a product (bundle grants included): what stock counts."""
         return self.db.execute(
             "SELECT COUNT(DISTINCT o.id) FROM orders o JOIN payments p ON p.order_id=o.id WHERE o.product=? "
+            "AND p.charge NOT LIKE '%:gift' "  # a claimed gift is the same unit the giver bought
             "AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.charge=p.charge)", (product,)).fetchone()[0]
 
     def paid_orders(self, user: int):
+        """What the user bought for themselves (gifts they bought for others are in gift_orders)."""
         return self.db.execute(
-            "SELECT * FROM orders WHERE user=? AND paid=1 ORDER BY created DESC", (user,)
+            "SELECT * FROM orders WHERE user=? AND paid=1 AND gift=0 ORDER BY created DESC", (user,)
         ).fetchall()
+
+    def gift_orders(self, user: int):
+        return self.db.execute(
+            "SELECT o.*, g.code, g.claimed_by, g.claimed_at FROM orders o JOIN gifts g ON g.order_id=o.id "
+            "WHERE o.user=? ORDER BY o.created DESC", (user,)).fetchall()
+
+    # gifts ---------------------------------------------------------------------
+    def create_gift(self, code: str, order) -> None:
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO gifts(code,order_id,giver,product,created) VALUES(?,?,?,?,?)",
+                            (code, order["id"], order["user"], order["product"], time.time()))
+
+    def gift(self, code: str):
+        return self.db.execute("SELECT * FROM gifts WHERE code=?", (code.strip().upper(),)).fetchone()
+
+    def gift_for_order(self, order_id: str):
+        return self.db.execute("SELECT * FROM gifts WHERE order_id=?", (order_id,)).fetchone()
+
+    def claim_gift(self, code: str, user: int, claim_order: str) -> bool:
+        with self.db:
+            return self.db.execute(
+                "UPDATE gifts SET claimed_by=?, claimed_at=?, claim_order=? WHERE code=? AND claimed_by IS NULL",
+                (user, time.time(), claim_order, code)).rowcount > 0
+
+    # reviews -------------------------------------------------------------------
+    def save_review(self, product: str, user: int, rating: int, text: str | None, name: str | None) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT INTO reviews(product,user,rating,text,name,created) VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(product,user) DO UPDATE SET rating=excluded.rating, text=excluded.text, "
+                "name=excluded.name, created=excluded.created",
+                (product, user, rating, (text or "").strip()[:500] or None, (name or "")[:40] or None, time.time()))
+
+    def review(self, product: str, user: int):
+        return self.db.execute("SELECT * FROM reviews WHERE product=? AND user=?", (product, user)).fetchone()
+
+    def reviews(self, product: str | None = None, limit: int = 20, include_hidden: bool = False) -> list[dict]:
+        where, args = [], []
+        if product:
+            where.append("product=?")
+            args.append(product)
+        if not include_hidden:
+            where.append("hidden=0")
+        sql = "SELECT * FROM reviews" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY created DESC LIMIT ?"
+        return [dict(r) for r in self.db.execute(sql, (*args, limit))]
+
+    def ratings(self) -> dict[str, tuple[float, int]]:
+        """product -> (average rating, number of visible reviews)."""
+        return {r["product"]: (round(r["avg"], 1), r["n"]) for r in self.db.execute(
+            "SELECT product, AVG(rating) AS avg, COUNT(*) AS n FROM reviews WHERE hidden=0 GROUP BY product")}
+
+    def hide_review(self, product: str, user: int, hidden: bool = True) -> bool:
+        with self.db:
+            return self.db.execute("UPDATE reviews SET hidden=? WHERE product=? AND user=?",
+                                   (int(hidden), product, user)).rowcount > 0
+
+    def review_candidates(self, older_than: float, newer_than: float):
+        """Paid own orders (not gifts, not bundle parts) between the two moments with no request sent yet."""
+        return self.db.execute(
+            "SELECT o.* FROM orders o JOIN payments p ON p.order_id=o.id "
+            "WHERE o.gift=0 AND p.stars>0 AND p.created<? AND p.created>? "
+            "AND NOT EXISTS (SELECT 1 FROM review_requests q WHERE q.order_id=o.id) "
+            "AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.charge=p.charge) "
+            "GROUP BY o.id", (older_than, newer_than)).fetchall()
+
+    def mark_review_requested(self, order_id: str) -> None:
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO review_requests VALUES(?,?)", (order_id, time.time()))
+
+    # waitlist ------------------------------------------------------------------
+    def join_waitlist(self, product: str, user: int) -> bool:
+        with self.db:
+            return self.db.execute("INSERT OR IGNORE INTO waitlist VALUES(?,?,?)",
+                                   (product, user, time.time())).rowcount > 0
+
+    def waiting(self, product: str) -> list[int]:
+        return [r[0] for r in self.db.execute("SELECT user FROM waitlist WHERE product=? ORDER BY created", (product,))]
+
+    def waitlist_counts(self) -> dict[str, int]:
+        return {r[0]: r[1] for r in self.db.execute("SELECT product, COUNT(*) FROM waitlist GROUP BY product")}
+
+    def leave_waitlist(self, product: str, users: list[int]) -> None:
+        with self.db:
+            self.db.executemany("DELETE FROM waitlist WHERE product=? AND user=?", [(product, u) for u in users])
+
+    # sources -------------------------------------------------------------------
+    def source_stats(self) -> list[dict]:
+        """Per first-touch source: people, buyers, Stars (refunds excluded). '' is direct."""
+        live = "NOT EXISTS (SELECT 1 FROM refunds r WHERE r.charge=p.charge)"
+        rows = self.db.execute(
+            "SELECT COALESCE(CASE WHEN substr(c.source, 1, 4)='ref_' THEN 'davet' "
+            "WHEN substr(c.source, 1, 4)='kod_' THEN 'kampanya:' || substr(c.source, 5) "
+            "WHEN substr(c.source, 1, 2)='p_' THEN 'ürün linki' "
+            "WHEN substr(c.source, 1, 5)='gift_' THEN 'hediye' ELSE c.source END, '') AS src, "
+            "COUNT(*) AS people, "
+            f"SUM(EXISTS(SELECT 1 FROM payments p WHERE p.user=c.user AND p.stars>0 AND {live})) AS buyers, "
+            f"SUM((SELECT COALESCE(SUM(p.stars),0) FROM payments p WHERE p.user=c.user AND {live})) AS stars "
+            "FROM contacts c GROUP BY src ORDER BY stars DESC, people DESC").fetchall()
+        return [{"source": r["src"] or "doğrudan", "people": r["people"], "buyers": r["buyers"] or 0,
+                 "stars": r["stars"] or 0,
+                 "conversion": round(100 * (r["buyers"] or 0) / r["people"], 1) if r["people"] else 0.0}
+                for r in rows]
 
     # refunds and issues --------------------------------------------------------
     def is_refunded(self, charge: str | None) -> bool:

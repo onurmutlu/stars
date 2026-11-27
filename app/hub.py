@@ -64,8 +64,9 @@ HUB_COMMANDS = [
 ]
 # In forward mode these commands stay with the shop; everything else goes to the bot's own backend.
 FORWARD_MODE_SHOP_COMMANDS = {"/magaza", "/shop", "/orders", "/paysupport", "/terms", "/durdur", "/baslat", "/davet"}
+SHOP_START_PREFIXES = ("p_", "kod_", "ref_", "gift_")
 # owner commands a forwarded bot still sends to the shop
-OWNER_SHOP_COMMANDS = {"/rapor", "/issues", "/dosya", "/musteriler", "/admin", "/yonetim", "/kod", "/duyuru", "/duyuru_onay",
+OWNER_SHOP_COMMANDS = {"/rapor", "/yorumlar", "/kaynaklar", "/issues", "/dosya", "/musteriler", "/admin", "/yonetim", "/kod", "/duyuru", "/duyuru_onay",
                        "/duyuru_iptal"}
 PRO_ID = "pro"
 
@@ -235,6 +236,8 @@ class Hub:
         command, argument = _command(text)
         if command in FORWARD_MODE_SHOP_COMMANDS:
             return True
+        if command == "/start" and argument.lower().startswith(SHOP_START_PREFIXES):
+            return True  # shop links: product, campaign, invite, gift
         if (message.get("from") or {}).get("id") == tenant["owner"]:
             return command in OWNER_SHOP_COMMANDS or (command == "/refund" and store.payment(argument) is not None)
         return False
@@ -383,9 +386,7 @@ class Hub:
 
 
 # ---------------------------------------------------------------------- HTTP layer
-class OrderRequest(BaseModel):
-    product_id: str = Field(min_length=1, max_length=32)
-    code: str | None = Field(None, max_length=24)
+from .main import OrderRequest, ReviewRequest, WaitRequest  # noqa: E402  same request bodies as the single shop
 
 
 class ConnectRequest(BaseModel):
@@ -401,6 +402,10 @@ class ShopPatch(BaseModel):
     sales_enabled: bool | None = None
     referral_percent: int | None = Field(None, ge=0, le=90)
     forward_secret: str | None = Field(None, max_length=256)
+
+
+class HideRequest(BaseModel):
+    hidden: bool
 
 
 class BroadcastRequest(BaseModel):
@@ -543,7 +548,7 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         tenant = tenant_by_slug(slug)
         user = buyer(tenant, x_telegram_init_data)
         try:
-            return await hub.shop(tenant).create_invoice(user, body.product_id, body.code)
+            return await hub.shop(tenant).create_invoice(user, body.product_id, body.code, body.gift)
         except TelegramError as exc:
             log.error("Kiracı %s fatura oluşturamadı: %s", tenant["id"], exc.description)
             raise HTTPException(502, "Fatura oluşturulamadı, biraz sonra tekrar dene.") from None
@@ -557,6 +562,25 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
     async def shop_purchases(slug: str, x_telegram_init_data: str | None = Header(None)):
         tenant = tenant_by_slug(slug)
         return hub.shop(tenant).purchases(buyer(tenant, x_telegram_init_data))
+
+    @app.get("/s/{slug}/api/reviews")
+    async def shop_reviews(slug: str, product_id: str, x_telegram_init_data: str | None = Header(None)):
+        tenant = tenant_by_slug(slug)
+        viewer = None
+        if x_telegram_init_data:
+            with contextlib.suppress(HTTPException, ShopError):
+                viewer = buyer(tenant, x_telegram_init_data)
+        return hub.shop(tenant).reviews(product_id, viewer)
+
+    @app.post("/s/{slug}/api/reviews")
+    async def shop_add_review(slug: str, body: ReviewRequest, x_telegram_init_data: str | None = Header(None)):
+        tenant = tenant_by_slug(slug)
+        return hub.shop(tenant).add_review(buyer(tenant, x_telegram_init_data), body.product_id, body.rating, body.text)
+
+    @app.post("/s/{slug}/api/waitlist")
+    async def shop_waitlist(slug: str, body: WaitRequest, x_telegram_init_data: str | None = Header(None)):
+        tenant = tenant_by_slug(slug)
+        return hub.shop(tenant).join_waitlist(buyer(tenant, x_telegram_init_data), body.product_id)
 
     # ----------------------------------------------------------- webhooks
     @app.post("/t/{tenant_id}/webhook")
@@ -719,6 +743,24 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         if not hub.store_for(tenant["id"]).set_note(user, body.note.strip()):
             raise ShopError("Müşteri bulunamadı.", 404)
         return {"ok": True}
+
+    @app.get("/panel/api/shops/{tenant_id}/sources")
+    async def panel_sources(tenant_id: str, x_telegram_init_data: str | None = Header(None)):
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        return hub.store_for(tenant["id"]).source_stats()
+
+    @app.get("/panel/api/shops/{tenant_id}/reviews")
+    async def panel_reviews(tenant_id: str, x_telegram_init_data: str | None = Header(None)):
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        return hub.store_for(tenant["id"]).reviews(limit=100, include_hidden=True)
+
+    @app.put("/panel/api/shops/{tenant_id}/reviews/{product_id}/{user}")
+    async def panel_hide_review(tenant_id: str, product_id: str, user: int, body: HideRequest,
+                                x_telegram_init_data: str | None = Header(None)):
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        if not hub.store_for(tenant["id"]).hide_review(product_id, user, body.hidden):
+            raise ShopError("Yorum bulunamadı.", 404)
+        return {"hidden": body.hidden}
 
     @app.post("/panel/api/shops/{tenant_id}/report")
     async def panel_report(tenant_id: str, x_telegram_init_data: str | None = Header(None)):
