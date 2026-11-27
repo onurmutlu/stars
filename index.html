@@ -139,6 +139,7 @@
     footer .wrap { display: flex; flex-wrap: wrap; gap: 14px 28px; }
     footer a { text-decoration: none; }
     #demo [hidden] { display: none; }
+    [data-stars-checkout][hidden] { display: none; }
     #demo-delivery { margin-block: 12px; }
   </style>
 </head>
@@ -163,6 +164,7 @@
         <div class="cta">
           <a class="btn btn-gold" href="https://t.me/SiyahKare?text=Merhaba%2C%20kiral%C4%B1k%20Stars%20ma%C4%9Fazas%C4%B1%20i%C3%A7in%20erken%20eri%C5%9Fim%20istiyorum.%20Botum%3A%20%40" target="_blank" rel="noopener">14 gün ücretsiz dene</a>
           <a class="btn btn-line" href="#demo">Mağaza demosu</a>
+          <a class="btn btn-line" data-stars-checkout hidden>Pro · Stars ile öde</a>
         </div>
         <p class="fine">Erken erişim: ilk mağazaları birlikte açıyoruz. Botunun kullanıcı adını yaz, aynı gün dönüyoruz.</p>
       </div>
@@ -246,6 +248,7 @@
             <div class="price">500 ⭐ <small>/ ay</small></div>
             <ul class="ticks"><li>İlk 14 gün ücretsiz</li><li>5 mağaza, mağaza başına 100 ürün</li><li>Markasız vitrin</li><li>Sunucusu olan botlara bozmadan bağlanma</li><li>Satış ve iade paneli</li><li>Öncelikli destek</li></ul>
             <a class="btn btn-gold" href="https://t.me/SiyahKare?text=Merhaba%2C%20Pro%20planla%20%28500%20%E2%AD%90/ay%29%20Stars%20ma%C4%9Fazas%C4%B1%20a%C3%A7mak%20istiyorum.%20Botum%3A%20%40" target="_blank" rel="noopener">14 gün ücretsiz dene</a>
+            <a class="btn btn-gold" data-stars-checkout hidden>Stars ile öde</a>
           </article>
           <article class="plan">
             <h3>Kendi sunucunda</h3>
@@ -359,5 +362,6 @@
     });
   })();
   </script>
+  <script src="./stars-checkout.js" defer></script>
 </body>
 </html>
