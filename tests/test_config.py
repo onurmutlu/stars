@@ -27,6 +27,7 @@ def test_valid_product(tmp_path):
 @pytest.mark.parametrize("change", [
     {"id": "Bad Id"}, {"title": ""}, {"title": "x" * 33}, {"stars": 0}, {"stars": 1.5}, {"stars": True},
     {"content": ""}, {"kind": "lifetime"}, {"photo_url": "http://insecure"},
+    {"category": "x" * 25}, {"badge": "x" * 17}, {"badge": 5},
 ])
 def test_invalid_products(tmp_path, change):
     with pytest.raises(ConfigError):
@@ -48,3 +49,9 @@ def test_settings_require_support_and_terms_when_selling():
 def test_settings_reject_weak_values(change):
     with pytest.raises(ConfigError):
         make_settings(**change).check()
+
+
+def test_category_and_badge_are_optional_and_public(tmp_path):
+    product = load_products(write(tmp_path, [GOOD | {"category": " Rehberler ", "badge": ""}]))["guide"]
+    assert product.category == "Rehberler" and product.badge is None
+    assert product.public()["category"] == "Rehberler" and "content" not in product.public()

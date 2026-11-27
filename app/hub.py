@@ -450,7 +450,8 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         tenant = tenant_by_slug(slug)
         shop_settings = registry.shop_settings(tenant)
         body = {"shop_name": shop_settings.shop_name, "sales_enabled": shop_settings.sales_enabled,
-                "support": shop_settings.support_text, "terms": shop_settings.terms_text}
+                "support": shop_settings.support_text, "terms": shop_settings.terms_text,
+                "bot_username": tenant["username"]}
         if hub.plan(tenant["owner"]).branding:
             link = f"https://t.me/{settings.bot_username}" if settings.bot_username else settings.base_url
             body["powered_by"] = {"text": f"{settings.name} ile yapıldı", "url": link}

@@ -4,7 +4,9 @@
     "title": "Başlangıç Rehberi",
     "description": "Adım adım PDF rehber. Ödemeden hemen sonra uygulamada ve bot mesajında açılır.",
     "stars": 50,
-    "content": "Rehberin hazır: https://example.com/rehber.pdf\nSorular için /paysupport"
+    "content": "Rehberin hazır: https://example.com/rehber.pdf\nSorular için /paysupport",
+    "category": "Rehberler",
+    "badge": "Yeni"
   },
   {
     "id": "vip-club",
@@ -12,6 +14,8 @@
     "description": "Özel kanal erişimi. 30 günde bir otomatik yenilenir, Telegram ayarlarından iptal edilebilir.",
     "stars": 250,
     "kind": "subscription",
-    "content": "Kulübe katıl: https://t.me/+DAVET_LINKI"
+    "content": "Kulübe katıl: https://t.me/+DAVET_LINKI",
+    "category": "Üyelik",
+    "badge": "Popüler"
   }
 ]

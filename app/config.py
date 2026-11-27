@@ -27,6 +27,8 @@ class Product:
     content: str
     kind: str = "one_time"
     photo_url: str | None = None
+    category: str | None = None   # Mini App filter chip, e.g. "Rehberler"
+    badge: str | None = None      # short label on the card, e.g. "Yeni", "Popüler"
 
     def public(self) -> dict:
         """What the Mini App may see before payment: never the content."""
@@ -37,7 +39,16 @@ class Product:
             "stars": self.stars,
             "kind": self.kind,
             "photo_url": self.photo_url,
+            "category": self.category,
+            "badge": self.badge,
         }
+
+def _optional_text(value):
+    """Blank strings become None; non-strings pass through so validation can reject them."""
+    if isinstance(value, str):
+        return value.strip() or None
+    return value
+
 
 def validate_product(item: dict) -> Product:
     """Build a Product from a JSON object, or raise ConfigError with a message for the seller."""
@@ -51,6 +62,8 @@ def validate_product(item: dict) -> Product:
         content=item.get("content", ""),
         kind=item.get("kind") or "one_time",
         photo_url=item.get("photo_url") or None,
+        category=_optional_text(item.get("category")),
+        badge=_optional_text(item.get("badge")),
     )
     if not isinstance(product.id, str) or not PRODUCT_ID.match(product.id):
         raise ConfigError(f"Geçersiz ürün id: {product.id!r} (a-z, 0-9, _ ve -; en fazla 32)")
@@ -67,6 +80,10 @@ def validate_product(item: dict) -> Product:
     if product.photo_url and (not isinstance(product.photo_url, str) or not product.photo_url.startswith("https://")
                               or len(product.photo_url) > 1024):
         raise ConfigError(f"{product.id}: photo_url https:// ile başlamalı")
+    if product.category is not None and (not isinstance(product.category, str) or len(product.category) > 24):
+        raise ConfigError(f"{product.id}: kategori en fazla 24 karakter olmalı")
+    if product.badge is not None and (not isinstance(product.badge, str) or len(product.badge) > 16):
+        raise ConfigError(f"{product.id}: etiket en fazla 16 karakter olmalı")
     return product
 
 

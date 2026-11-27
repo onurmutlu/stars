@@ -10,28 +10,58 @@
 </head>
 <body>
   <header class="top">
-    <h1 id="shop-name">Stars Mağaza</h1>
+    <div class="brand">
+      <div class="logo" id="shop-logo" aria-hidden="true">⭐</div>
+      <div>
+        <h1 id="shop-name">Stars Mağaza</h1>
+        <p class="tagline" data-i18n="tagline">Telegram Stars ile güvenli ödeme · anında teslim</p>
+      </div>
+    </div>
     <nav class="tabs" role="tablist">
-      <button class="tab active" data-tab="shop" role="tab" aria-selected="true" data-i18n="tab_shop">Mağaza</button>
-      <button class="tab" data-tab="library" role="tab" aria-selected="false" data-i18n="tab_library">Satın aldıklarım</button>
+      <button class="tab active" data-tab="shop" role="tab" aria-selected="true"><span data-i18n="tab_shop">Mağaza</span></button>
+      <button class="tab" data-tab="library" role="tab" aria-selected="false"><span data-i18n="tab_library">Satın aldıklarım</span> <span class="count" id="library-count" hidden></span></button>
     </nav>
   </header>
 
   <main>
     <section id="view-shop" class="view">
+      <div class="tools" id="tools" hidden>
+        <input id="search" class="search" type="search" autocomplete="off" enterkeyhint="search" data-i18n-placeholder="search">
+        <div class="chips" id="chips" role="tablist"></div>
+      </div>
       <div id="products" class="grid" aria-live="polite"></div>
     </section>
+
+    <section id="view-detail" class="view" hidden>
+      <article class="detail">
+        <div class="hero" id="detail-hero"></div>
+        <div class="detail-body">
+          <div class="tags" id="detail-tags"></div>
+          <h2 id="detail-title"></h2>
+          <p class="price big" id="detail-price"></p>
+          <p class="desc" id="detail-desc"></p>
+          <ul class="facts" id="detail-facts"></ul>
+          <div class="detail-actions">
+            <button class="btn wide" id="detail-buy"></button>
+            <button class="btn ghost wide" id="detail-share" hidden data-i18n="share">Paylaş</button>
+          </div>
+        </div>
+      </article>
+    </section>
+
     <section id="view-library" class="view" hidden>
       <div id="library" class="list" aria-live="polite"></div>
     </section>
+
     <section id="view-content" class="view" hidden>
-      <button class="link back" id="back" data-i18n="back">‹ Geri</button>
       <article class="card content-card">
+        <span class="badge ok" data-i18n="owned">Aktif</span>
         <h2 id="content-title"></h2>
         <p class="muted" id="content-meta"></p>
         <div id="content-body" class="content-body"></div>
       </article>
     </section>
+
     <div id="outside" class="empty" hidden data-i18n="outside">Bu mağaza Telegram içinden açılmalı.</div>
   </main>
 

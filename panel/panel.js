@@ -310,6 +310,8 @@
     $("p-kind").value = p ? p.kind : "one_time";
     $("p-content").value = p ? p.content : "";
     $("p-photo").value = p && p.photo_url ? p.photo_url : "";
+    $("p-category").value = p && p.category ? p.category : "";
+    $("p-badge").value = p && p.badge ? p.badge : "";
     show("product");
   }
 
@@ -318,6 +320,7 @@
       id: $("p-id").value.trim().toLowerCase(), title: $("p-title").value.trim(),
       description: $("p-description").value.trim(), stars: parseInt($("p-stars").value, 10),
       kind: $("p-kind").value, content: $("p-content").value.trim(), photo_url: $("p-photo").value.trim() || null,
+      category: $("p-category").value.trim() || null, badge: $("p-badge").value.trim() || null,
     };
     const path = `/panel/api/shops/${shop.id}/products` + (editing ? `/${encodeURIComponent(editing)}` : "");
     await api(path, json(editing ? "PUT" : "POST", item));

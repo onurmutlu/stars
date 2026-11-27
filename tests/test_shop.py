@@ -242,6 +242,15 @@ def test_commands(client, api):
     assert "iade" in api.of("sendMessage")[-1]["text"]
 
 
+def test_start_deep_link_opens_the_product(client, api):
+    hook(client, text("/start p_guide"))
+    message = api.of("sendMessage")[-1]
+    assert message["text"].startswith("Rehber")
+    assert message["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"] == "https://shop.example.com/app?p=guide"
+    hook(client, text("/start p_nope", update_id=4))
+    assert api.of("sendMessage")[-1]["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"] == "https://shop.example.com/app"
+
+
 def test_orders_command_resends_active_content(client, api):
     order_id = order(client)
     hook(client, paid(order_id))

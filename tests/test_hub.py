@@ -232,6 +232,29 @@ def test_product_validation_and_limits(world):
             "id": "p9", "title": "t", "description": "d", "stars": 1, "content": "c"}).status_code == 200
 
 
+def test_category_and_badge_reach_the_buyer_and_old_databases_migrate(world, tmp_path):
+    import sqlite3
+    from app.tenants import Registry
+    with TestClient(build(world)) as client:
+        shop = connect(client).json()
+        url = f"/panel/api/shops/{shop['id']}/products"
+        assert client.post(url, headers=panel(), json={"id": "g", "title": "G", "description": "d", "stars": 1,
+                                                      "content": "c", "category": "Rehber", "badge": "Yeni"}).status_code == 200
+        saved = client.get(f"/panel/api/shops/{shop['id']}", headers=panel()).json()["products"][0]
+        assert saved["category"] == "Rehber" and saved["badge"] == "Yeni"
+        assert client.get(f"/s/{shop['username']}/api/config").json()["bot_username"] == shop["username"]
+    # a database from before these columns existed gets them on open
+    path = tmp_path / "old.sqlite3"
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE products(tenant TEXT, id TEXT, title TEXT, description TEXT, stars INTEGER, content TEXT, "
+               "kind TEXT, photo_url TEXT, position INTEGER DEFAULT 0, archived INTEGER DEFAULT 0, updated REAL, "
+               "PRIMARY KEY(tenant,id))")
+    db.commit(); db.close()
+    registry = Registry(hub_settings(), path)
+    assert {"category", "badge"} <= {r[1] for r in registry.db.execute("PRAGMA table_info(products)")}
+    registry.close()
+
+
 # ------------------------------------------------------------------ buyer flow per tenant
 def test_full_tenant_purchase_uses_tenant_bot(hub_client, world):
     shop = ready_shop(hub_client)

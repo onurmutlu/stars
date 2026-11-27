@@ -234,6 +234,16 @@ class StarsShop:
             rows = self.store.open_issues()
             reply = "\n".join(f"{r['reason']} · user={r['user']} · {r['stars']}⭐ · {r['charge']}" for r in rows[:30]) \
                 or "Açık ödeme sorunu yok."
+        elif command == "/start" and argument.startswith("p_") and argument[2:] in self.products:
+            # deep link t.me/<bot>?start=p_<id>: open the Mini App on that product
+            product = self.products[argument[2:]]
+            await self.api(
+                "sendMessage", chat_id=user,
+                text=f"{product.title} · ⭐ {product.stars}\n{product.description}",
+                reply_markup={"inline_keyboard": [[{"text": "🛍 Ürünü aç",
+                                                    "web_app": {"url": f"{self.settings.webapp_url}/app?p={product.id}"}}]]},
+            )
+            return
         else:
             await self.api(
                 "sendMessage", chat_id=user,
