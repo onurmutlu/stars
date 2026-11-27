@@ -94,7 +94,46 @@
         return card;
       }));
     }
+    $("admin").hidden = !me.is_admin;
+    if (me.is_admin) await loadAdmin();
     show("home");
+  }
+
+  async function loadAdmin() {
+    const data = await api("/panel/api/admin/overview");
+    const t = data.totals;
+    $("admin-stats").replaceChildren(...[
+      [fmtNum(t.shops), "Mağaza"], [fmtNum(t.owners), "Satıcı"],
+      ["⭐ " + fmtNum(t.stars), "Net Stars"], [fmtNum(t.issues), "Açık sorun"],
+    ].map(([value, label]) => {
+      const tile = el("div", "stat");
+      tile.append(el("div", "value", value), el("div", "label", label));
+      return tile;
+    }));
+    $("admin-shops").replaceChildren(...(data.shops.length ? data.shops.map(adminShopItem)
+      : [el("div", "empty", "Henüz tenant mağazası yok.")]));
+  }
+
+  function adminShopItem(s) {
+    const card = el("article", "card shop-item");
+    const row = el("div", "row");
+    row.append(el("h3", "", `${s.shop_name} · @${s.username}`), statusBadge(s));
+    const details = el("p", "meta", `satıcı ${s.owner} · ${PLAN_NAMES[s.plan.name]} · ${fmtNum(s.payments)} ödeme · ⭐${fmtNum(s.stars)} · ${fmtNum(s.issues)} sorun`);
+    const actions = el("div", "actions");
+    const open = el("button", "btn small ghost", "Mağazayı aç");
+    open.addEventListener("click", () => openLink(s.shop_url));
+    const suspend = el("button", "btn small ghost", s.status === "suspended" ? "Yeniden aç" : "Askıya al");
+    suspend.addEventListener("click", () => guarded(suspend, async () => {
+      const next = s.status === "suspended" ? "active" : "suspended";
+      const verb = next === "suspended" ? "askıya alınsın" : "yeniden açılsın";
+      if (!(await confirmBox(`@${s.username} ${verb} mı?`))) return;
+      await api(`/panel/api/admin/shops/${s.id}/status`, json("POST", { status: next }));
+      toast(next === "suspended" ? "Mağaza askıya alındı." : "Mağaza yeniden açıldı; satıcı satışını ayrıca açabilir.");
+      await loadAdmin();
+    }));
+    actions.append(open, suspend);
+    card.append(row, details, actions);
+    return card;
   }
 
   function statusBadge(s) {
@@ -338,6 +377,7 @@
     document.querySelectorAll("[data-back]").forEach((b) => b.addEventListener("click", loadHome));
     document.querySelectorAll("[data-back-shop]").forEach((b) => b.addEventListener("click", () => openShop(shop.id)));
     $("go-connect").addEventListener("click", openConnect);
+    $("admin-refresh").addEventListener("click", () => guarded($("admin-refresh"), loadAdmin));
     $("connect").addEventListener("click", () => guarded($("connect"), connect));
     $("sales").addEventListener("click", () => guarded($("sales"), toggleSales));
     $("save-settings").addEventListener("click", () => guarded($("save-settings"), saveSettings));

@@ -216,6 +216,31 @@ def test_owner_isolation_in_panel(hub_client):
     assert hub_client.get(url).status_code == 401
 
 
+def test_operator_admin_panel_isolated_and_can_suspend(hub_client):
+    shop = ready_shop(hub_client)
+    # Seller sessions cannot discover or mutate the operator surface.
+    assert hub_client.get("/panel/api/admin/overview", headers=panel()).status_code == 404
+    assert hub_client.post(f"/panel/api/admin/shops/{shop['id']}/status",
+                           json={"status": "suspended"}, headers=panel()).status_code == 404
+
+    admin = panel(1)
+    me = hub_client.get("/panel/api/me", headers=admin).json()
+    assert me["is_admin"] is True
+    overview = hub_client.get("/panel/api/admin/overview", headers=admin).json()
+    assert overview["totals"] == {"shops": 1, "active": 1, "suspended": 0, "payments": 0,
+                                  "stars": 0, "issues": 0, "owners": 1}
+    assert overview["shops"][0]["owner"] == SELLER
+    assert TOKEN_A not in json.dumps(overview) and "webhook_secret" not in json.dumps(overview)
+
+    response = hub_client.post(f"/panel/api/admin/shops/{shop['id']}/status",
+                               json={"status": "suspended"}, headers=admin)
+    assert response.status_code == 200
+    assert response.json()["status"] == "suspended" and not response.json()["sales_enabled"]
+    assert hub_client.get(f"/s/{shop['username']}/api/products").json() == []
+    assert hub_client.post(f"/panel/api/admin/shops/{shop['id']}/status",
+                           json={"status": "deleted"}, headers=admin).status_code == 422
+
+
 def test_product_validation_and_limits(world):
     with TestClient(build(world, trial_days=0)) as client:
         shop = connect(client).json()

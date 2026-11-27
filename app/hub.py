@@ -367,6 +367,10 @@ class RefundRequest(BaseModel):
     charge: str = Field(min_length=1, max_length=256)
 
 
+class AdminStatusRequest(BaseModel):
+    status: str = Field(pattern="^(active|suspended)$")
+
+
 def create_hub_app(settings: HubSettings | None = None, registry: Registry | None = None,
                    api_factory: ApiFactory | None = None, forwarder: Forwarder | None = None,
                    billing_store: Store | None = None, store_factory=None, background: bool = True) -> FastAPI:
@@ -515,6 +519,13 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         registry.ensure_owner(owner)
         return owner
 
+    def admin_id(init_data: str | None) -> int:
+        owner = owner_id(init_data)
+        if owner not in settings.admin_ids:
+            # Ordinary sellers should not be able to enumerate the operator surface.
+            raise HTTPException(404, "Bulunamadı.")
+        return owner
+
     def tenant_view(tenant) -> dict:
         products = [dict(p) for p in registry.products(tenant["id"])]
         limit = hub.plan(tenant["owner"]).max_products
@@ -534,7 +545,43 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         plan = hub.plan(owner)
         return {"owner": owner, "plan": plan.public(), "pro_stars": settings.pro_stars,
                 "billing_enabled": settings.billing_enabled, "hub_name": settings.name,
+                "is_admin": owner in settings.admin_ids,
                 "shops": [public_tenant(t, settings) for t in registry.tenants_of(owner)]}
+
+    @app.get("/panel/api/admin/overview")
+    async def panel_admin_overview(x_telegram_init_data: str | None = Header(None)):
+        admin_id(x_telegram_init_data)
+        shops = []
+        totals = {"shops": 0, "active": 0, "suspended": 0, "payments": 0,
+                  "stars": 0, "issues": 0, "owners": set()}
+        for tenant in registry.all():
+            stats = hub.stats(tenant)
+            plan = hub.plan(tenant["owner"])
+            shops.append(public_tenant(tenant, settings) | {
+                "owner": tenant["owner"], "plan": plan.public(),
+                "payments": stats["payments"], "stars": stats["stars"],
+                "issues": len(stats["issues"]),
+            })
+            totals["shops"] += 1
+            totals[tenant["status"]] += 1
+            totals["payments"] += stats["payments"]
+            totals["stars"] += stats["stars"]
+            totals["issues"] += len(stats["issues"])
+            totals["owners"].add(tenant["owner"])
+        totals["owners"] = len(totals["owners"])
+        return {"totals": totals, "shops": shops}
+
+    @app.post("/panel/api/admin/shops/{tenant_id}/status")
+    async def panel_admin_status(tenant_id: str, body: AdminStatusRequest,
+                                 x_telegram_init_data: str | None = Header(None)):
+        admin_id(x_telegram_init_data)
+        tenant = registry.tenant(tenant_id)
+        if not tenant or tenant["status"] == "deleted":
+            raise HTTPException(404, "Mağaza bulunamadı.")
+        fields = {"status": body.status}
+        if body.status == "suspended":
+            fields["sales_enabled"] = False
+        return public_tenant(registry.update(tenant_id, **fields), settings)
 
     @app.post("/panel/api/shops")
     async def panel_connect(body: ConnectRequest, x_telegram_init_data: str | None = Header(None)):

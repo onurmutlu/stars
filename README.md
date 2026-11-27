@@ -44,8 +44,9 @@ panelden ürünlerini ekler, satışı açar. Kod, sunucu ya da HTTPS kurmaz.
 - **Ayrım ve güvenlik:** bot token'ları `HUB_MASTER_KEY` ile şifreli saklanır, hiçbir API'de dönmez; her mağazanın ayrı
   SQLite dosyası, ayrı webhook yolu ve gizli anahtarı vardır; alıcı oturumu o mağazanın kendi bot imzasıyla doğrulanır;
   satıcı sadece kendi mağazalarını görür. Sohbete yapıştırılan token mesajı bot tarafından silinir.
-- **Operatör:** `python -m app.hubcli tenants` (tüm mağazalar, plan, ödeme, sorun), `suspend` / `unsuspend`
-  (askıdaki mağaza satış yapamaz ama gelen ödemeler kaydedilmeye devam eder).
+- **Operatör:** `HUB_ADMIN_IDS` içindeki hesaplar satıcı panelinde platform geneli mağaza/satıcı/Stars/sorun
+  özetini görür, mağazayı askıya alıp yeniden açabilir. Aynı işlemler `python -m app.hubcli tenants`,
+  `suspend` / `unsuspend` ile de yapılır (askıdaki mağaza satış yapamaz ama gelen ödemeler kaydedilmeye devam eder).
 
 ```bash
 cp hub.env.example .env.hub && python -m app.hubcli keys     # anahtarları .env.hub'a koy
