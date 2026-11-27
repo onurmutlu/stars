@@ -1234,7 +1234,8 @@ class StarsShop:
                     self.store.db.execute("UPDATE orders SET delivered=0 WHERE id=?", (order["id"],))
                 await self.try_deliver(self.store.order(order["id"]))
             reply = f"{len(orders)} aktif siparişin yeniden gönderildi." if orders else "Aktif siparişin yok."
-        elif command == "/refund" and user in self.settings.admin_ids:
+        elif command == "/refund" and user in (self.settings.refund_ids if self.settings.refund_ids is not None
+                                                 else self.settings.admin_ids):
             if not argument:
                 reply = "Kullanım: /refund <telegram_payment_charge_id>"
             else:

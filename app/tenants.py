@@ -429,6 +429,7 @@ class Registry:
             sales_enabled=sales,
             db_path=str(self.store_path(tenant["id"])),
             admin_ids=frozenset({tenant["owner"], *(h["user_id"] for h in self.helpers(tenant["id"]))}),
+            refund_ids=frozenset({tenant["owner"]}),
             init_data_max_age=self.hub.init_data_max_age,
             bot_username=tenant["username"],
             admin_url=f"https://t.me/{self.hub.bot_username}?start=panel" if self.hub.bot_username else "",

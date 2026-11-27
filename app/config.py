@@ -322,6 +322,7 @@ class Settings:
     db_path: str = "data/shop.sqlite3"
     products_path: str = "products.json"
     admin_ids: frozenset[int] = frozenset()
+    refund_ids: frozenset[int] | None = None  # who may /refund; None = every admin (helpers are left out)
     init_data_max_age: int = 86400
     order_ttl: int = 3600
     checkout_urls: tuple[tuple[str, str], ...] = ()

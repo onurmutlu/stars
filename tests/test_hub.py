@@ -278,6 +278,7 @@ def test_helpers_get_admin_rights_but_not_the_panel(hub_client):
     assert helpers[0]["user_id"] == HELPER and helpers[0]["name"] == "Ece"
     tenant = hub_client.hub.registry.tenant(shop["id"])
     assert HELPER in hub_client.hub.registry.shop_settings(tenant).admin_ids
+    assert hub_client.hub.registry.shop_settings(tenant).refund_ids == frozenset({tenant["owner"]})
     assert hub_client.get(f"{url}/helpers", headers=panel(HELPER)).status_code == 404   # panel stays the owner's
     assert hub_client.get(url, headers=panel()).json()["helpers"][0]["user_id"] == HELPER
     assert hub_client.delete(f"{url}/helpers/{HELPER}", headers=panel()).json() == []

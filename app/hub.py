@@ -239,8 +239,10 @@ class Hub:
         if command == "/start" and argument.lower().startswith(SHOP_START_PREFIXES):
             return True  # shop links: product, campaign, invite, gift
         sender = (message.get("from") or {}).get("id")
-        if sender == tenant["owner"] or sender in {h["user_id"] for h in self.registry.helpers(tenant["id"])}:
+        if sender == tenant["owner"]:
             return command in OWNER_SHOP_COMMANDS or (command == "/refund" and store.payment(argument) is not None)
+        if sender in {h["user_id"] for h in self.registry.helpers(tenant["id"])}:
+            return command in OWNER_SHOP_COMMANDS  # refunds stay with the owner
         return False
 
     async def tenant_update(self, tenant, update: dict) -> None:
