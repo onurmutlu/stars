@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -160,6 +160,16 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
     @app.get("/api/purchases")
     async def purchases(x_telegram_init_data: str | None = Header(None)):
         return shop.purchases(user_id(x_telegram_init_data))
+
+    @app.get("/api/photo/{product_id}")
+    async def photo(product_id: str):
+        try:
+            data = await shop.photo_bytes(product_id)
+        except TelegramError:
+            raise HTTPException(502, "Görsel alınamadı.") from None
+        if not data:
+            raise HTTPException(404)
+        return Response(data, media_type=assets.image_type(data), headers={"Cache-Control": "public, max-age=86400"})
 
     @app.get("/api/reviews")
     async def reviews(product_id: str, x_telegram_init_data: str | None = Header(None)):

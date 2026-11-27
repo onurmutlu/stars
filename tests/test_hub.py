@@ -234,6 +234,22 @@ def test_panel_sources_and_review_moderation(hub_client):
     assert hub_client.get(f"{url}/sources", headers=panel(SELLER2)).status_code == 404
 
 
+def test_panel_sales_chart_and_option_groups(hub_client):
+    shop = ready_shop(hub_client)
+    url = f"/panel/api/shops/{shop['id']}"
+    r = hub_client.post(f"{url}/products", headers=panel(), json={
+        "id": "k7", "title": "Kurs", "description": "d", "stars": 5, "content": "c", "group": "Kurs", "option": "7 gün"})
+    assert r.status_code == 200
+    product = [p for p in r.json()["products"] if p["id"] == "k7"][0]
+    assert product["group"] == "Kurs" and product["option"] == "7 gün" and product["photo_uploaded"] is False
+    catalog = hub_client.get(f"/s/{shop['username']}/api/products").json()
+    assert [p["option"] for p in catalog if p["id"] == "k7"] == ["7 gün"]
+    sales = hub_client.get(f"{url}/sales", headers=panel()).json()
+    assert len(sales["days"]) == 30 and sales["total_sales"] == 0
+    assert hub_client.get(f"{url}/sales", headers=panel(SELLER2)).status_code == 404
+    assert hub_client.get(f"/s/{shop['username']}/api/photo/k7").status_code == 404
+
+
 def test_owner_isolation_in_panel(hub_client):
     shop = ready_shop(hub_client)
     url = f"/panel/api/shops/{shop['id']}"

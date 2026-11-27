@@ -30,7 +30,7 @@ from typing import Awaitable, Callable
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -66,7 +66,7 @@ HUB_COMMANDS = [
 FORWARD_MODE_SHOP_COMMANDS = {"/magaza", "/shop", "/orders", "/paysupport", "/terms", "/durdur", "/baslat", "/davet"}
 SHOP_START_PREFIXES = ("p_", "kod_", "ref_", "gift_")
 # owner commands a forwarded bot still sends to the shop
-OWNER_SHOP_COMMANDS = {"/rapor", "/yorumlar", "/kaynaklar", "/issues", "/dosya", "/musteriler", "/admin", "/yonetim", "/kod", "/duyuru", "/duyuru_onay",
+OWNER_SHOP_COMMANDS = {"/foto", "/rapor", "/yorumlar", "/kaynaklar", "/issues", "/dosya", "/musteriler", "/admin", "/yonetim", "/kod", "/duyuru", "/duyuru_onay",
                        "/duyuru_iptal"}
 PRO_ID = "pro"
 
@@ -563,6 +563,16 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         tenant = tenant_by_slug(slug)
         return hub.shop(tenant).purchases(buyer(tenant, x_telegram_init_data))
 
+    @app.get("/s/{slug}/api/photo/{product_id}")
+    async def shop_photo(slug: str, product_id: str):
+        try:
+            data = await hub.shop(tenant_by_slug(slug)).photo_bytes(product_id)
+        except TelegramError:
+            raise HTTPException(502, "Görsel alınamadı.") from None
+        if not data:
+            raise HTTPException(404)
+        return Response(data, media_type=assets.image_type(data), headers={"Cache-Control": "public, max-age=86400"})
+
     @app.get("/s/{slug}/api/reviews")
     async def shop_reviews(slug: str, product_id: str, x_telegram_init_data: str | None = Header(None)):
         tenant = tenant_by_slug(slug)
@@ -641,8 +651,10 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         limit = hub.plan(tenant["owner"]).max_products
         store = hub.store_for(tenant["id"])
         files = store.product_files()
-        waiting, ratings = store.waitlist_counts(), store.ratings()
+        waiting, ratings, photos = store.waitlist_counts(), store.ratings(), store.product_photos()
         for index, product in enumerate(products):
+            product["group"] = product.pop("grp", None)
+            product["photo_uploaded"] = product["id"] in photos
             product["waiting"] = waiting.get(product["id"], 0)
             product["rating"], product["reviews"] = ratings.get(product["id"], (None, 0))
             product["over_limit"] = index >= limit
@@ -747,6 +759,11 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         if not hub.store_for(tenant["id"]).set_note(user, body.note.strip()):
             raise ShopError("Müşteri bulunamadı.", 404)
         return {"ok": True}
+
+    @app.get("/panel/api/shops/{tenant_id}/sales")
+    async def panel_sales(tenant_id: str, days: int = 30, x_telegram_init_data: str | None = Header(None)):
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        return hub.store_for(tenant["id"]).daily_sales(max(7, min(days, 90)))
 
     @app.get("/panel/api/shops/{tenant_id}/sources")
     async def panel_sources(tenant_id: str, x_telegram_init_data: str | None = Header(None)):

@@ -44,5 +44,18 @@ class BotAPI:
                                 data.get("parameters", {}).get("retry_after", 0))
         return data["result"]
 
+    async def download(self, file_id: str, max_bytes: int = 10_000_000) -> bytes:
+        """Bytes of a file the bot received (getFile + file URL). Bots may download files up to 20 MB."""
+        info = await self("getFile", file_id=file_id)
+        if (info.get("file_size") or 0) > max_bytes:
+            raise TelegramError("getFile", None, "dosya çok büyük")
+        try:
+            response = await self._client.get(self._url.replace("/bot", "/file/bot", 1) + info["file_path"])
+        except httpx.HTTPError as exc:
+            raise TelegramError("download", None, type(exc).__name__) from None
+        if response.status_code != 200:
+            raise TelegramError("download", response.status_code, "indirilemedi")
+        return response.content
+
     async def close(self) -> None:
         await self._client.aclose()

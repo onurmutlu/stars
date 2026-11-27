@@ -66,7 +66,7 @@ main { padding: 14px 16px 96px; }
 .price::before { content: "⭐"; margin-right: 4px; }
 .price.big { font-size: 22px; }
 .mine { font-size: 12px; color: var(--ok); font-weight: 600; }
-.badge { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: color-mix(in srgb, var(--btn) 14%, transparent); color: var(--btn); font-weight: 600; }
+.badge { white-space: nowrap; font-size: 12px; padding: 3px 9px; border-radius: 999px; background: color-mix(in srgb, var(--btn) 14%, transparent); color: var(--btn); font-weight: 600; }
 .badge.solid { background: var(--star); color: #1a1200; }
 .badge.ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
 .badge.off { background: color-mix(in srgb, var(--hint) 18%, transparent); color: var(--hint); }
@@ -152,3 +152,12 @@ main { padding: 14px 16px 96px; }
 .review-head { display: flex; gap: 8px; align-items: baseline; font-size: 13px; flex-wrap: wrap; }
 .review-head .muted { margin-left: auto; color: var(--hint); }
 .review-stars { color: #f5b400; letter-spacing: 1px; }
+
+/* options of one product */
+.options { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
+.option { display: grid; gap: 2px; text-align: left; padding: 8px 14px; border-radius: 12px; cursor: pointer; font: inherit;
+  border: 1.5px solid color-mix(in srgb, var(--hint) 30%, transparent); background: transparent; color: var(--text); }
+.option b { font-size: 13px; font-weight: 600; color: var(--hint); }
+.option.active { border-color: var(--btn); background: color-mix(in srgb, var(--btn) 10%, transparent); }
+.option.active b { color: var(--btn); }
+.option.sold { opacity: .5; }

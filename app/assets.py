@@ -28,3 +28,14 @@ def page(path: Path) -> HTMLResponse:
     html = path.read_text(encoding="utf-8")
     html = ASSET.sub(lambda m: f'{m.group(1)}?v={_version(DIRS[m.group(2)], m.group(3))}"', html)
     return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+
+def image_type(data: bytes) -> str:
+    """Media type of a picture from its first bytes (Telegram photos are JPEG; documents may be PNG/WebP)."""
+    if data.startswith(b"\x89PNG"):
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:3] == b"GIF":
+        return "image/gif"
+    return "image/jpeg"

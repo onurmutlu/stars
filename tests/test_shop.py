@@ -919,3 +919,54 @@ def test_sources_command_groups_first_touch(client, api, store):
     hook(client, text("/kaynaklar", user_id=ADMIN, update_id=102))
     reply = api.of("sendMessage")[-1]["text"]
     assert "instagram: 1 · 1 · ⭐50 · %100.0" in reply and "davet: 1 · 0" in reply
+
+
+# ------------------------------------------------------------------ photos, options, sales chart
+def test_photo_sent_to_the_bot_becomes_the_product_image(client, api, store, tmp_path):
+    async def download(file_id):
+        api.calls.append(("download", {"file_id": file_id}))
+        return b"\x89PNG fake"
+    api.download = download
+    client.shop.settings = client.shop.settings.__class__(**{**client.shop.settings.__dict__, "db_path": str(tmp_path / "s.db")})
+    photo = {"update_id": 110, "message": {"message_id": 9, "chat": {"id": ADMIN, "type": "private"}, "from": {"id": ADMIN},
+             "caption": "/foto guide", "photo": [{"file_id": "small", "file_unique_id": "u1"},
+                                                  {"file_id": "big", "file_unique_id": "u2", "file_size": 1000}]}}
+    hook(client, photo)
+    assert "eklendi" in api.of("sendMessage")[-1]["text"]
+    item = {p["id"]: p for p in client.get("/api/products").json()}["guide"]
+    assert item["photo_url"].startswith("api/photo/guide?v=")
+    r = client.get("/api/photo/guide")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+    client.get("/api/photo/guide")
+    assert len(api.of("download")) == 1                      # cached on disk
+    assert client.get("/api/photo/club").status_code == 404
+    client.post("/api/orders", json={"product_id": "guide"}, headers=headers())
+    assert api.of("createInvoiceLink")[-1]["photo_url"] == "https://shop.example.com/api/photo/guide"
+    hook(client, text("/foto guide sil", user_id=ADMIN, update_id=111))
+    assert client.get("/api/photo/guide").status_code == 404
+    hook(client, text("/foto guide", user_id=OTHER, update_id=112))   # buyers cannot set pictures
+    assert store.product_photo("guide") is None
+
+
+def test_option_groups(tmp_path):
+    import json
+    from app.config import ConfigError, load_products
+    base = {"title": "T", "description": "d", "stars": 5, "content": "c"}
+    def load(items):
+        path = tmp_path / "p.json"
+        path.write_text(json.dumps(items))
+        return load_products(path)
+    got = load([base | {"id": "k7", "group": "Kurs", "option": "7 gün", "access_days": 7},
+                base | {"id": "k30", "group": "Kurs", "option": "30 gün", "access_days": 30, "stars": 15}])
+    assert got["k30"].public()["group"] == "Kurs" and got["k30"].public()["option"] == "30 gün"
+    for bad in ([base | {"id": "a", "option": "7 gün"}], [base | {"id": "a", "group": "Kurs"}],
+                [base | {"id": "a", "group": "x" * 40, "option": "1"}]):
+        with pytest.raises(ConfigError):
+            load(bad)
+
+
+def test_daily_sales_series_and_top_products(client, store):
+    hook(client, paid(order(client), update_id=113))
+    data = store.daily_sales(30)
+    assert len(data["days"]) == 30 and data["stars"][-1] == 50 and data["sales"][-1] == 1
+    assert data["top"][0]["product"] == "guide" and data["total_stars"] == 50

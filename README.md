@@ -158,6 +158,15 @@ bot yazar. Hub panelinde ürünün yanında "🔔 N bekliyor" görünür.
 **Kaynaklar:** `/kaynaklar` (ve panelde "Kaynaklar") ilk geliş kaynağına göre kişi, alıcı, ⭐ ve dönüşüm oranını verir.
 Davet, kampanya kodu, ürün ve hediye linkleri kendi başlıklarında toplanır.
 
+**Ürün görseli:** Fotoğrafı bota gönder, açıklamasına `/foto <ürün>` yaz; görsel mağazada ve ödeme ekranında görünür
+(https adresi gerekmez; mağaza görseli Telegram'dan bir kez indirip saklar). `/foto <ürün> sil` kaldırır.
+
+**Seçenekler:** Aynı ürünün süre/fiyat seçenekleri için her seçeneği ayrı ürün olarak ekle ve hepsine aynı `group`
+("Premium Kurs") ile kendi `option` adını ("7 gün", "30 gün") ver. Mini App bunları tek kartta "⭐90+ · 2 seçenek" olarak
+gösterir, ürün sayfasında seçenek düğmeleriyle geçilir. Stok, kod, hediye ve yorum her seçenekte ayrı çalışır.
+
+**Satış grafiği:** Hub panelinde son 30 günün günlük ⭐ grafiği ve en çok satan 5 ürün.
+
 **CSV rapor:** `/rapor` (ya da Hub panelinde "CSV raporu bota gönder") satislar.csv ve musteriler.csv dosyalarını bot
 sohbetine gönderir; Excel Türkçe karakterleri doğru açar (UTF-8 BOM, `;` ayraç).
 

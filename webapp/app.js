@@ -27,6 +27,7 @@
       error: "Bir şeyler ters gitti. Tekrar dene.", until: "Geçerlilik:", refunded: "İade edildi", expired: "Süresi doldu",
       share_text: "{title} · ⭐ {n}", per_month: "/ 30 gün", admin: "⚙️ Yönetim",
       foot_admin: "Yönetim paneli", foot_license: "Lisans yönetimi", foot_buy: "Sen de mağaza aç",
+      from_price: "{n}+", n_options: "{n} seçenek",
       bundle_tag: "Paket", fact_bundle: "Pakette: {list}. Ayrı ayrı ⭐ {n}; paketle ⭐ {save} kazanırsın.",
       fact_bundle_plain: "Pakette: {list}. Hepsi tek ödemeyle açılır.",
       left_n: "Son {n}", sold_out: "Tükendi", fact_left: "Sınırlı sayıda: {n} adet kaldı.",
@@ -63,6 +64,7 @@
       error: "Something went wrong. Please try again.", until: "Valid until:", refunded: "Refunded", expired: "Expired",
       share_text: "{title} · ⭐ {n}", per_month: "/ 30 days", admin: "⚙️ Admin",
       foot_admin: "Admin panel", foot_license: "License", foot_buy: "Open your own shop",
+      from_price: "from {n}", n_options: "{n} options",
       bundle_tag: "Bundle", fact_bundle: "Includes: {list}. Separately ⭐ {n}; you save ⭐ {save}.",
       fact_bundle_plain: "Includes: {list}. All unlocked with one payment.",
       left_n: "{n} left", sold_out: "Sold out", fact_left: "Limited: {n} left.",
@@ -170,7 +172,7 @@
   function picture(product) {
     if (product.photo_url) {
       const img = el("img");
-      img.src = product.photo_url;
+      img.src = /^https:\/\//.test(product.photo_url) ? product.photo_url : `${BASE}/${product.photo_url}`;
       img.alt = "";
       img.loading = "lazy";
       img.addEventListener("error", () => img.replaceWith(placeholder(product)), { once: true });
@@ -253,8 +255,19 @@
     const visible = products.filter((p) =>
       (!filter.category || p.category === filter.category) &&
       (!query || `${p.title} ${p.description} ${p.category || ""}`.toLocaleLowerCase(lang).includes(query)));
-    container.replaceChildren(...(visible.length ? visible.map(productCard) : [el("div", "empty", t("no_match"))]));
+    // options of one product (same group) share a card: the cheapest one stands for the group
+    const cards = [];
+    const seen = new Map();
+    for (const p of visible) {
+      if (!p.group) { cards.push(p); continue; }
+      if (!seen.has(p.group)) { seen.set(p.group, cards.length); cards.push(p); continue; }
+      const index = seen.get(p.group);
+      if (p.stars < cards[index].stars) cards[index] = p;
+    }
+    container.replaceChildren(...(cards.length ? cards.map(productCard) : [el("div", "empty", t("no_match"))]));
   }
+
+  const optionsOf = (product) => product.group ? products.filter((p) => p.group === product.group) : [product];
 
   function productCard(product) {
     const card = el("button", "card product");
@@ -265,14 +278,18 @@
     else if ((product.includes || []).length) thumb.append(el("span", "badge solid flag", t("bundle_tag")));
     if (product.sold_out) card.classList.add("sold");
     const info = el("div", "info");
-    info.append(el("h3", "", product.title), el("p", "", product.description));
+    const options = optionsOf(product);
+    const many = options.length > 1;
+    info.append(el("h3", "", many ? product.group : product.title), el("p", "", product.description));
     if (product.reviews) info.append(el("span", "rating", `★ ${product.rating} (${product.reviews})`));
     const row = el("div", "row");
     const price = el("span", "price-wrap");
-    price.append(el("span", "price", String(product.stars)));
-    if (product.compare_at) price.append(el("s", "was", String(product.compare_at)));
+    price.append(el("span", "price", many && options.some((o) => o.stars !== product.stars)
+      ? t("from_price", { n: product.stars }) : String(product.stars)));
+    if (product.compare_at && !many) price.append(el("s", "was", String(product.compare_at)));
     row.append(price);
-    if (owned.has(product.id)) row.append(el("span", "mine", t("yours")));
+    if (options.some((o) => owned.has(o.id))) row.append(el("span", "mine", t("yours")));
+    else if (many) row.append(el("span", "badge", t("n_options", { n: options.length })));
     else if (product.kind === "subscription") row.append(el("span", "badge", t("per_month")));
     else if (product.access_days) row.append(el("span", "badge", t("per_days", { n: product.access_days })));
     const hint = !owned.has(product.id) && scarcity(product);
@@ -299,6 +316,16 @@
     if (hint) tags.push(hint);
     if (isOwned) tags.push(el("span", "badge ok", t("yours")));
     $("detail-tags").replaceChildren(...tags);
+    const options = optionsOf(product);
+    $("detail-options").hidden = options.length < 2;
+    $("detail-options").replaceChildren(...(options.length < 2 ? [] : options.map((o) => {
+      const chip = el("button", "option" + (o.id === product.id ? " active" : ""));
+      chip.type = "button";
+      chip.append(el("span", "", o.option || o.title), el("b", "", `⭐${o.stars}`));
+      if (o.sold_out) chip.classList.add("sold");
+      chip.addEventListener("click", () => { if (o.id !== current.id) { haptic("select"); openDetail(o); } });
+      return chip;
+    })));
     $("detail-title").textContent = product.title;
     $("detail-price").textContent = String(product.stars);
     $("detail-was").textContent = product.compare_at ? `⭐${product.compare_at}` : "";

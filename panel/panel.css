@@ -69,3 +69,16 @@ p.muted.small { font-size: 12.5px; margin: -4px 0 4px; }
 .badge.stage-sepette { background: color-mix(in srgb, #f5a623 22%, transparent); color: #b7791f; }
 .badge.stage-müşteri, .badge.stage-abone { background: color-mix(in srgb, #2fa84f 18%, transparent); color: #2f8a46; }
 .badge.stage-iade { background: color-mix(in srgb, #e5484d 16%, transparent); color: #e5484d; }
+
+/* sales chart */
+.chart-card { margin-top: 12px; }
+.chart-card h3 { margin: 0; }
+.chart { display: flex; align-items: flex-end; gap: 3px; height: 120px; margin: 14px 0 4px; }
+.chart .bar { flex: 1; background: var(--btn); border-radius: 3px 3px 0 0; min-width: 4px; cursor: pointer; }
+.chart .bar.zero { background: color-mix(in srgb, var(--hint) 25%, transparent); }
+.chart-axis { display: flex; justify-content: space-between; font-size: 12px; color: var(--hint); }
+.top { margin: 12px 0 0; padding-left: 20px; display: grid; gap: 6px; font-size: 14px; }
+.top li::marker { color: var(--hint); }
+.top li { padding-left: 2px; }
+.top li span { margin-right: 8px; }
+.top li b { float: right; font-weight: 600; }

@@ -179,10 +179,33 @@
     loadPromos().catch(() => {});
     loadBroadcast().catch(() => {});
     loadSources().catch(() => {});
+    loadSales().catch(() => {});
     loadReviews().catch(() => {});
   }
 
   // ---------------------------------------------------------------- sources and reviews
+  async function loadSales() {
+    const data = await api(`/panel/api/shops/${shop.id}/sales`);
+    $("sales-card").hidden = false;
+    $("sales-total").textContent = `⭐ ${fmtNum(data.total_stars)} · ${fmtNum(data.total_sales)} satış`;
+    const max = Math.max(1, ...data.stars);
+    const fmtDay = (d) => { const [, m, day] = d.split("-"); return `${+day}.${+m}`; };
+    $("sales-chart").setAttribute("aria-label", `Son 30 günde ${data.total_sales} satış, ${data.total_stars} yıldız`);
+    $("sales-chart").replaceChildren(...data.days.map((day, i) => {
+      const bar = el("div", "bar" + (data.stars[i] ? "" : " zero"));
+      bar.style.height = `${Math.max(3, Math.round((data.stars[i] / max) * 100))}%`;
+      bar.title = `${fmtDay(day)}: ⭐${data.stars[i]} · ${data.sales[i]} satış`;
+      bar.addEventListener("click", () => toast(bar.title));
+      return bar;
+    }));
+    $("chart-from").textContent = fmtDay(data.days[0]);
+    $("top-products").replaceChildren(...(data.top.length ? data.top.map((t) => {
+      const li = el("li");
+      li.append(el("span", "", t.title), el("b", "", `⭐${fmtNum(t.stars)} · ${t.sales}`));
+      return li;
+    }) : [el("li", "muted", "Bu dönemde satış yok. İlk satış için ürün linkini paylaş.")]));
+  }
+
   async function loadSources() {
     const rows = await api(`/panel/api/shops/${shop.id}/sources`);
     $("sources").replaceChildren(...(rows.length ? rows.map((r) => {
@@ -423,7 +446,7 @@
     foot.append(el("span", p.over_limit ? "badge off" : "badge",
       p.over_limit ? "Plan sınırı dışında, satılmıyor" : kindText + (p.file ? " · 📎" : "") + (p.channel_id ? " · 📣" : "") +
       (p.reviews ? ` · ★${p.rating} (${p.reviews})` : "") + (p.waiting ? ` · 🔔 ${p.waiting} bekliyor` : "") +
-      (p.upsell ? " · ✨ öneri" : "") + (p.includes ? " · 🧺 paket" : "") + (p.stock ? ` · stok ${p.stock}` : "") + (p.sale_until ? " · ⏰" : "")));
+      (p.group ? ` · ${p.group}: ${p.option}` : "") + (p.photo_uploaded ? " · 🖼" : "") + (p.upsell ? " · ✨ öneri" : "") + (p.includes ? " · 🧺 paket" : "") + (p.stock ? ` · stok ${p.stock}` : "") + (p.sale_until ? " · ⏰" : "")));
     const actions = el("div", "actions");
     const edit = el("button", "btn small ghost", "Düzenle");
     edit.addEventListener("click", () => openProduct(p));
@@ -518,6 +541,15 @@
     $("p-kind").value = p ? p.kind : "one_time";
     $("p-content").value = p ? p.content : "";
     $("p-photo").value = p && p.photo_url ? p.photo_url : "";
+    $("p-photo-id").textContent = p ? p.id : "ürün-kimliği";
+    $("p-photo-state").textContent = p && p.photo_uploaded ? "✓ Yüklenmiş bir fotoğraf var." : "";
+    $("p-group").value = p && p.group ? p.group : "";
+    $("p-option").value = p && p.option ? p.option : "";
+    $("p-group").setAttribute("list", "p-groups");
+    const groups = [...new Set(shop.products.map((x) => x.group).filter(Boolean))];
+    let groupList = $("p-groups");
+    if (!groupList) { groupList = el("datalist"); groupList.id = "p-groups"; document.body.append(groupList); }
+    groupList.replaceChildren(...groups.map((g) => Object.assign(el("option"), { value: g })));
     $("p-category").value = p && p.category ? p.category : "";
     $("p-badge").value = p && p.badge ? p.badge : "";
     $("p-channel").value = p && p.channel_id ? String(p.channel_id) : "";
@@ -563,6 +595,8 @@
       includes: $("p-kind").value === "subscription" ? null : ($("p-includes").value.trim() || null),
       stock: $("p-stock").value.trim() || null,
       compare_at: $("p-compare").value.trim() || null,
+      group: $("p-group").value.trim() || null,
+      option: $("p-group").value.trim() ? ($("p-option").value.trim() || null) : null,
       upsell: $("p-upsell").value || null,
       upsell_percent: $("p-upsell").value ? ($("p-upsell-percent").value.trim() || null) : null,
       sale_until: $("p-until").value ? $("p-until").value.replace("T", " ") : null,

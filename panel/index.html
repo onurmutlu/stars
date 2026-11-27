@@ -72,6 +72,13 @@
 
       <div class="stats" id="stats"></div>
 
+      <article class="card chart-card" id="sales-card" hidden>
+        <div class="row"><h3>Son 30 gün</h3><span class="muted" id="sales-total"></span></div>
+        <div class="chart" id="sales-chart" role="img"></div>
+        <div class="chart-axis"><span id="chart-from"></span><span>bugün</span></div>
+        <ol class="top" id="top-products"></ol>
+      </article>
+
       <div class="section-head">
         <h2>Ürünler <span class="muted" id="product-count"></span></h2>
         <button class="btn" id="add-product">+ Ürün</button>
@@ -186,6 +193,12 @@
         </div>
         <label>Satıştan sonra öner <span class="muted">(alıcıya bot mesajıyla bu ürün önerilir)</span>
           <select id="p-upsell"></select></label>
+        <div class="two">
+          <label>Seçenek grubu <span class="muted">(aynı ürünün süre/fiyat seçenekleri)</span>
+            <input id="p-group" maxlength="32" placeholder="ör. Premium Kurs"></label>
+          <label>Bu seçeneğin adı
+            <input id="p-option" maxlength="20" placeholder="ör. 30 gün"></label>
+        </div>
         <label id="p-includes-wrap">Paket içeriği <span class="muted">(isteğe bağlı: tek seferlik ürün kimlikleri, virgülle; ör. rehber,sablon)</span>
           <input id="p-includes" maxlength="400" placeholder="rehber,sablon" autocomplete="off" spellcheck="false"></label>
         <label>Stok <span class="muted">(boş = sınırsız; ör. ilk 50 kişi)</span>
@@ -197,7 +210,9 @@
           <input id="p-channel" inputmode="numeric" maxlength="24" placeholder="-1001234567890" list="p-channels" autocomplete="off"></label>
         <datalist id="p-channels"></datalist>
         <p class="muted small" id="p-channel-help">Botunu kanalına yönetici olarak ekle ("Kullanıcı davet et" ve "Üyeleri yasakla" açık). Bot sana kanal ID'sini yazar, burada da listelenir.</p>
-        <label>Görsel adresi <span class="muted">(isteğe bağlı, https)</span>
+        <p class="muted small" id="p-photo-help">🖼 En kolayı: ürün fotoğrafını botuna gönder, açıklamasına <b>/foto <span id="p-photo-id">ürün-kimliği</span></b> yaz.
+          <span id="p-photo-state"></span></p>
+        <label>ya da görsel adresi <span class="muted">(isteğe bağlı, https)</span>
           <input id="p-photo" maxlength="1024" placeholder="https://..."></label>
         <button class="btn wide" id="save-product">Kaydet</button>
       </article>

@@ -84,6 +84,9 @@ CREATE TABLE IF NOT EXISTS reviews(
 -- people waiting for a sold-out product
 CREATE TABLE IF NOT EXISTS waitlist(
     product TEXT NOT NULL, user INTEGER NOT NULL, created REAL NOT NULL, PRIMARY KEY(product, user));
+-- a product picture sent to the bot (/foto <product>); served by the shop itself
+CREATE TABLE IF NOT EXISTS product_photos(
+    product TEXT PRIMARY KEY, file_id TEXT NOT NULL, unique_id TEXT NOT NULL, added REAL NOT NULL);
 -- the one review request per order, sent a day after the purchase
 CREATE TABLE IF NOT EXISTS review_requests(order_id TEXT PRIMARY KEY, sent REAL NOT NULL);
 -- channels and groups the bot was made admin of (from my_chat_member updates)
@@ -288,6 +291,45 @@ class Store:
     def leave_waitlist(self, product: str, users: list[int]) -> None:
         with self.db:
             self.db.executemany("DELETE FROM waitlist WHERE product=? AND user=?", [(product, u) for u in users])
+
+    # photos --------------------------------------------------------------------
+    def set_product_photo(self, product: str, file_id: str, unique_id: str) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO product_photos VALUES(?,?,?,?)", (product, file_id, unique_id, time.time()))
+
+    def product_photo(self, product: str):
+        return self.db.execute("SELECT * FROM product_photos WHERE product=?", (product,)).fetchone()
+
+    def product_photos(self) -> dict[str, str]:
+        return {r["product"]: r["unique_id"] for r in self.db.execute("SELECT product, unique_id FROM product_photos")}
+
+    def remove_product_photo(self, product: str) -> bool:
+        with self.db:
+            return self.db.execute("DELETE FROM product_photos WHERE product=?", (product,)).rowcount > 0
+
+    # sales over time -------------------------------------------------------------
+    def daily_sales(self, days: int = 30, now: float | None = None) -> dict:
+        """Stars and sales per local day for the last N days, and the best products in that window."""
+        now = time.time() if now is None else now
+        start_day = time.localtime(now - (days - 1) * 86400)
+        start = time.mktime((start_day.tm_year, start_day.tm_mon, start_day.tm_mday, 0, 0, 0, 0, 0, -1))
+        live = "NOT EXISTS (SELECT 1 FROM refunds r WHERE r.charge=p.charge)"
+        rows = self.db.execute(
+            f"SELECT p.created, p.stars, o.product, o.title FROM payments p JOIN orders o ON o.id=p.order_id "
+            f"WHERE p.stars>0 AND p.created>=? AND {live}", (start,)).fetchall()
+        labels = [time.strftime("%Y-%m-%d", time.localtime(start + i * 86400 + 3600)) for i in range(days)]
+        stars, sales, top = dict.fromkeys(labels, 0), dict.fromkeys(labels, 0), {}
+        for r in rows:
+            day = time.strftime("%Y-%m-%d", time.localtime(r["created"]))
+            if day in stars:
+                stars[day] += r["stars"]
+                sales[day] += 1
+            entry = top.setdefault(r["product"], {"product": r["product"], "title": r["title"], "sales": 0, "stars": 0})
+            entry["sales"] += 1
+            entry["stars"] += r["stars"]
+        return {"days": labels, "stars": [stars[d] for d in labels], "sales": [sales[d] for d in labels],
+                "top": sorted(top.values(), key=lambda e: (-e["stars"], -e["sales"]))[:5],
+                "total_stars": sum(stars.values()), "total_sales": sum(sales.values())}
 
     # sources -------------------------------------------------------------------
     def source_stats(self) -> list[dict]:

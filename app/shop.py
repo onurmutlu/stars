@@ -19,6 +19,7 @@ import logging
 import re
 import secrets
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Awaitable, Callable
 
@@ -92,6 +93,7 @@ class StarsShop:
         if not self.settings.sales_enabled:
             return []
         files = self.store.product_files()
+        photos = self.store.product_photos()
         ratings = self.store.ratings()
         now = time.time()
         items = []
@@ -100,8 +102,11 @@ class StarsShop:
                 continue  # closed sales disappear from the shop; buyers keep their purchases
             reason, left = self.availability(p, now)
             rating, reviews = ratings.get(p.id, (None, 0))
-            items.append(p.public() | {"file": files.get(p.id, {}).get("kind"), "left": left, "sold_out": left == 0,
-                                       "rating": rating, "reviews": reviews})
+            item = p.public() | {"file": files.get(p.id, {}).get("kind"), "left": left, "sold_out": left == 0,
+                                 "rating": rating, "reviews": reviews}
+            if p.id in photos:  # a photo sent to the bot wins over a photo URL
+                item["photo_url"] = f"api/photo/{p.id}?v={photos[p.id][:12]}"
+            items.append(item)
         return items
 
     def quote(self, product_id: str, code: str | None) -> dict:
@@ -141,7 +146,9 @@ class StarsShop:
         price = self.quote(product.id, code)
         order_id = self.store.create_order(user, product, stars=price["stars"], promo=price["code"], gift=gift)
         extra = {"subscription_period": SUBSCRIPTION_PERIOD} if product.kind == "subscription" else {}
-        if product.photo_url:
+        if self.store.product_photo(product.id):
+            extra["photo_url"] = f"{self.settings.webapp_url}/api/photo/{product.id}"
+        elif product.photo_url:
             extra["photo_url"] = product.photo_url
         link = await self.api(
             "createInvoiceLink",
@@ -436,6 +443,8 @@ class StarsShop:
             self.store.mark_refunded(refunded["telegram_payment_charge_id"])
             if first and self.settings.notify_sales:
                 await self.notify_admins(f"↩️ İade: ⭐{refunded.get('total_amount', '?')} · {_who(sender)}")
+        elif sender["id"] in self.settings.admin_ids and text.split("@")[0].split(" ")[0].lower() == "/foto":
+            await self._photo(sender["id"], text, message)
         elif sender["id"] in self.settings.admin_ids and text.split("@")[0].split(" ")[0].lower() == "/dosya":
             await self._attach(sender["id"], text, message)
         elif sender["id"] in self.settings.admin_ids and message.get("reply_to_message"):
@@ -490,6 +499,45 @@ class StarsShop:
             details.append(f"{uses} kullanım")
         link = f"\nKampanya linki: https://t.me/{self.settings.bot_username}?start=kod_{code}" if self.settings.bot_username else ""
         return f"✅ {code}: " + ", ".join(details) + "." + link + "\nAlıcı mağazada kodu yazar ya da linke tıklar."
+
+    async def _photo(self, admin: int, text: str, message: dict) -> None:
+        """/foto <product> as the caption of a picture makes it the product image; /foto <product> sil removes it."""
+        parts = text.split()
+        product = parts[1].lower() if len(parts) > 1 else ""
+        picture = (message.get("photo") or [None])[-1]
+        document = message.get("document") or {}
+        if not picture and (document.get("mime_type") or "").startswith("image/"):
+            picture = document
+        if product not in self.products:
+            reply = ("Kullanım: ürün görselini bota fotoğraf olarak gönder, açıklamasına /foto <ürün-kimliği> yaz.\n"
+                     f"Ürünler: {', '.join(self.products) or 'henüz ürün yok'}")
+        elif len(parts) > 2 and parts[2].lower() in ("sil", "kaldir", "kaldır"):
+            reply = "Görsel kaldırıldı." if self.store.remove_product_photo(product) else "Bu üründe yüklenmiş görsel yoktu."
+        elif not picture:
+            reply = f"Fotoğrafı gönderirken açıklamasına /foto {product} yaz."
+        elif (picture.get("file_size") or 0) > 5_000_000:
+            reply = "Görsel 5 MB'tan küçük olmalı."
+        else:
+            self.store.set_product_photo(product, picture["file_id"], picture.get("file_unique_id") or picture["file_id"])
+            reply = f"🖼 Görsel '{self.products[product].title}' ürününe eklendi; mağazada hemen görünür."
+        await self.api("sendMessage", chat_id=admin, text=reply)
+
+    async def photo_bytes(self, product_id: str) -> bytes | None:
+        """The uploaded product picture, cached on disk next to the database."""
+        photo = self.store.product_photo(product_id)
+        if not photo:
+            return None
+        cache = None
+        if self.settings.db_path and self.settings.db_path != ":memory:":
+            folder = Path(self.settings.db_path).parent / "photos"
+            cache = folder / (re.sub(r"[^A-Za-z0-9_-]", "", photo["unique_id"])[:64] + ".img")
+            if cache.exists():
+                return cache.read_bytes()
+        data = await self.api.download(photo["file_id"])
+        if cache:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_bytes(data)
+        return data
 
     async def _attach(self, admin: int, text: str, message: dict) -> None:
         """/dosya <ürün> as the caption of a file attaches it; /dosya <ürün> sil removes it."""
@@ -1117,7 +1165,7 @@ class StarsShop:
                 rows.append([{"text": "🔑 Lisans yönetimi", "url": self.settings.buy_url}])
             rows.append([{"text": "🛍 Mağazayı aç", "web_app": {"url": self.settings.webapp_url + "/app"}}])
             await self.api("sendMessage", chat_id=user,
-                           text="Yönetim\nMüşteriler: /musteriler · İade: /refund <charge_id> · Ödeme sorunları: /issues · CSV rapor: /rapor\nKaynaklar: /kaynaklar · Yorumlar: /yorumlar\n"
+                           text="Yönetim\nMüşteriler: /musteriler · İade: /refund <charge_id> · Ödeme sorunları: /issues · CSV rapor: /rapor\nKaynaklar: /kaynaklar · Yorumlar: /yorumlar · Ürün görseli: fotoğraf + /foto <ürün>\n"
                                 "Müşteri mesajları buraya gelir; cevaplamak için yanıtla.",
                            reply_markup={"inline_keyboard": rows})
             return
