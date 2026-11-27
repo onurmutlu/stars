@@ -276,3 +276,22 @@ def test_config_admin_link_only_for_admins_and_buy_link_for_all(api, store):
         public = client.get("/api/config", headers=headers(BUYER)).json()
         assert "admin_url" not in public and public["buy"] == {"text": "Sen de aç", "url": "https://t.me/HubBot?start=lisans"}
         assert "admin_url" not in client.get("/api/config").json()
+
+
+def test_admin_command_lists_admin_links_only_for_admins(api, store):
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    from tests.conftest import PRODUCTS, make_settings
+    settings = make_settings(admin_url="https://t.me/HubBot?start=panel", buy_url="https://t.me/HubBot?start=lisans")
+    with TestClient(create_app(settings, PRODUCTS, store, api, background=False)) as client:
+        hook(client, text("/admin", user_id=ADMIN))
+        rows = api.of("sendMessage")[-1]["reply_markup"]["inline_keyboard"]
+        assert [r[0]["text"] for r in rows][:2] == ["⚙️ Yönetim paneli", "🔑 Lisans yönetimi"]
+        assert client.get("/api/config", headers=headers(ADMIN)).json()["license_url"].endswith("start=lisans")
+        hook(client, text("/admin", update_id=9))
+        assert "Yönetim" not in api.of("sendMessage")[-1]["text"]
+
+
+def test_mini_app_assets_are_cache_busted(client):
+    html = client.get("/app").text
+    assert '/static/app.js?v=' in html and '/static/style.css?v=' in html

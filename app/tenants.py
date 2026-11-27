@@ -352,6 +352,8 @@ class Registry:
             db_path=str(self.store_path(tenant["id"])),
             admin_ids=frozenset({tenant["owner"]}),
             init_data_max_age=self.hub.init_data_max_age,
+            admin_url=f"https://t.me/{self.hub.bot_username}?start=panel" if self.hub.bot_username else "",
+            buy_url=f"https://t.me/{self.hub.bot_username}?start=lisans" if self.hub.bot_username else "",
         )
 
     def store_path(self, tenant_id: str) -> Path:

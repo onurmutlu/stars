@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import initdata
+from . import initdata, assets
 from .config import Product, Settings, load_products
 from .shop import ShopError, StarsShop, process_update
 from .store import Store
@@ -87,8 +87,10 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
                 viewer = initdata.validate(x_telegram_init_data, settings.bot_token, settings.init_data_max_age)["id"]
             except initdata.InvalidInitData:
                 viewer = None
-            if viewer in settings.admin_ids:
-                body["admin_url"] = settings.admin_url  # only admins see the way to the admin screen
+            if viewer in settings.admin_ids:  # only admins see the way to the admin screen
+                body["admin_url"] = settings.admin_url
+                if settings.buy_url:
+                    body["license_url"] = settings.buy_url  # the license link shows the active license or sells one
         return body
 
     @app.get("/api/products")
@@ -130,7 +132,7 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
 
     @app.get("/app")
     async def index():
-        return FileResponse(WEBAPP_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+        return assets.page(WEBAPP_DIR / "index.html")
 
     app.mount("/static", StaticFiles(directory=WEBAPP_DIR), name="static")
     return app

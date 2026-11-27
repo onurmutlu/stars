@@ -34,7 +34,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import initdata
+from . import initdata, assets
 from .config import ConfigError, Product, Settings
 from .shop import ShopError, StarsShop, process_update
 from .store import Store
@@ -476,7 +476,7 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
     @app.get("/s/{slug}/app")
     async def shop_index(slug: str):
         tenant_by_slug(slug)
-        return FileResponse(WEBAPP_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+        return assets.page(WEBAPP_DIR / "index.html")
 
     @app.get("/s/{slug}/api/config")
     async def shop_config(slug: str, x_telegram_init_data: str | None = Header(None)):
@@ -497,6 +497,8 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
             viewer = None
         if viewer == tenant["owner"]:
             body["admin_url"] = hub.panel_link()  # only the shop owner sees the way to the panel
+            if hub.buy_link():
+                body["license_url"] = hub.buy_link()
         return body
 
     @app.get("/s/{slug}/api/products")
@@ -569,7 +571,7 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
     @app.get("/panel")
     @app.get("/panel/")
     async def panel_index():
-        return FileResponse(PANEL_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+        return assets.page(PANEL_DIR / "index.html")
 
     @app.get("/panel/api/me")
     async def panel_me(x_telegram_init_data: str | None = Header(None)):

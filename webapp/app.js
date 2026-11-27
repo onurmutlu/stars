@@ -19,6 +19,7 @@
       waiting: "Ödeme onaylanıyor…", slow: "Ödeme alındı; içerik birkaç dakika içinde bot üzerinden de gelecek.",
       error: "Bir şeyler ters gitti. Tekrar dene.", until: "Geçerlilik:", refunded: "İade edildi", expired: "Süresi doldu",
       share_text: "{title} · ⭐ {n}", per_month: "/ 30 gün", admin: "⚙️ Yönetim",
+      foot_admin: "Yönetim paneli", foot_license: "Lisans yönetimi", foot_buy: "Sen de mağaza aç",
     },
     en: {
       tab_shop: "Shop", tab_library: "My purchases", support: "Payment support", terms: "Terms",
@@ -34,6 +35,7 @@
       waiting: "Confirming payment…", slow: "Payment received; the bot will also send your content in a few minutes.",
       error: "Something went wrong. Please try again.", until: "Valid until:", refunded: "Refunded", expired: "Expired",
       share_text: "{title} · ⭐ {n}", per_month: "/ 30 days", admin: "⚙️ Admin",
+      foot_admin: "Admin panel", foot_license: "License", foot_buy: "Open your own shop",
     },
   };
   const t = (key, vars = {}) => {
@@ -410,14 +412,23 @@
       $("shop-name").textContent = config.shop_name;
       $("shop-logo").textContent = (config.shop_name.trim()[0] || "⭐").toUpperCase();
       document.title = config.shop_name;
-      if (config.admin_url && /^https:\/\//.test(config.admin_url)) {
+      const safe = (url) => typeof url === "string" && /^https:\/\//.test(url);
+      const footLink = (item, button, url) => {
+        $(button).addEventListener("click", () => openLink(url));
+        $(item).hidden = false;
+      };
+      const isAdmin = safe(config.admin_url);   // the server sends it only to the shop's admins
+      if (isAdmin) {
         $("admin").hidden = false;
         $("admin").addEventListener("click", () => openLink(config.admin_url));
+        footLink("fi-admin", "foot-admin", config.admin_url);
+        if (safe(config.license_url)) footLink("fi-license", "foot-license", config.license_url);
       }
-      if (config.buy && /^https:\/\//.test(config.buy.url)) {
+      if (config.buy && safe(config.buy.url)) {
         $("buy-text").textContent = config.buy.text;
         $("buy-banner").hidden = false;
         $("buy-banner").addEventListener("click", () => { haptic("light"); openLink(config.buy.url); });
+        if (!isAdmin) footLink("fi-buy", "foot-buy", config.buy.url);
       }
       if (config.powered_by && /^https:\/\//.test(config.powered_by.url)) {
         const link = el("button", "link", config.powered_by.text);
