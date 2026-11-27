@@ -34,6 +34,8 @@ class OrderRequest(BaseModel):
     product_id: str = Field(min_length=1, max_length=32)
     code: str | None = Field(None, max_length=24)
     gift: bool = False
+    answer: str | None = Field(None, max_length=300)
+    amount: int | None = Field(None, ge=1, le=100000)
 
 
 class ReviewRequest(BaseModel):
@@ -148,7 +150,7 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
         user = user_id(x_telegram_init_data)
         refresh_products()
         try:
-            return await shop.create_invoice(user, body.product_id, body.code, body.gift)
+            return await shop.create_invoice(user, body.product_id, body.code, body.gift, body.answer, body.amount)
         except TelegramError as exc:
             log.error("Fatura oluşturulamadı: %s", exc.description)
             raise HTTPException(502, "Fatura oluşturulamadı, biraz sonra tekrar dene.") from None

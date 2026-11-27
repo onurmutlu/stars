@@ -161,3 +161,11 @@ main { padding: 14px 16px 96px; }
 .option.active { border-color: var(--btn); background: color-mix(in srgb, var(--btn) 10%, transparent); }
 .option.active b { color: var(--btn); }
 .option.sold { opacity: .5; }
+
+/* pay what you want, buyer question */
+.amount-box, .ask-box { display: grid; gap: 8px; margin: 12px 0 4px; }
+.field-label { font-weight: 600; font-size: 14px; }
+.amount-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.ask-box textarea { width: 100%; box-sizing: border-box; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--hint) 30%, transparent);
+  background: var(--bg); color: inherit; padding: 10px; font: inherit; resize: vertical; }
+.amount-row .chip { border: 1px solid color-mix(in srgb, var(--hint) 35%, transparent); }

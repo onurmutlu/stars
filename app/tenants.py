@@ -54,6 +54,8 @@ CREATE TABLE IF NOT EXISTS tenants(
     last_sync REAL,
     last_sync_error TEXT,
     referral_percent INTEGER NOT NULL DEFAULT 0,
+    cart_discount INTEGER NOT NULL DEFAULT 0,
+    sale_webhook TEXT,
     created REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS tenants_owner ON tenants(owner);
@@ -78,6 +80,8 @@ CREATE TABLE IF NOT EXISTS products(
     upsell_percent INTEGER,
     grp TEXT,
     option TEXT,
+    ask TEXT,
+    flexible INTEGER NOT NULL DEFAULT 0,
     position INTEGER NOT NULL DEFAULT 0,
     archived INTEGER NOT NULL DEFAULT 0,
     updated REAL NOT NULL,
@@ -190,11 +194,15 @@ class Registry:
         for column, kind in (("category", "TEXT"), ("badge", "TEXT"), ("channel_id", "INTEGER"),
                              ("access_days", "INTEGER"), ("includes", "TEXT"),
                              ("stock", "INTEGER"), ("sale_until", "REAL"), ("compare_at", "INTEGER"),
-                             ("upsell", "TEXT"), ("upsell_percent", "INTEGER"), ("grp", "TEXT"), ("option", "TEXT")):
+                             ("upsell", "TEXT"), ("upsell_percent", "INTEGER"), ("grp", "TEXT"), ("option", "TEXT"),
+                             ("ask", "TEXT"), ("flexible", "INTEGER NOT NULL DEFAULT 0")):
             if column not in columns:  # databases created before these fields
                 self.db.execute(f"ALTER TABLE products ADD COLUMN {column} {kind}")
-        if "referral_percent" not in {row[1] for row in self.db.execute("PRAGMA table_info(tenants)")}:
-            self.db.execute("ALTER TABLE tenants ADD COLUMN referral_percent INTEGER NOT NULL DEFAULT 0")
+        tenant_columns = {row[1] for row in self.db.execute("PRAGMA table_info(tenants)")}
+        for column, kind in (("referral_percent", "INTEGER NOT NULL DEFAULT 0"),
+                             ("cart_discount", "INTEGER NOT NULL DEFAULT 0"), ("sale_webhook", "TEXT")):
+            if column not in tenant_columns:
+                self.db.execute(f"ALTER TABLE tenants ADD COLUMN {column} {kind}")
         self.db.commit()
 
     # owners and plans ----------------------------------------------------------
@@ -278,10 +286,14 @@ class Registry:
                     raise ConfigError("Mağaza adı boş olamaz")
             elif key == "sales_enabled":
                 value = int(bool(value))
-            elif key == "referral_percent":
+            elif key in ("referral_percent", "cart_discount"):
                 value = int(value or 0)
                 if not 0 <= value <= 90:
-                    raise ConfigError("Davet indirimi 0-90 arasında olmalı")
+                    raise ConfigError("İndirim yüzdesi 0-90 arasında olmalı")
+            elif key == "sale_webhook":
+                value = (value or "").strip() or None
+                if value and (not value.startswith("https://") or len(value) > 512):
+                    raise ConfigError("Satış webhook adresi https:// ile başlamalı")
             elif key == "status":
                 if value not in STATUSES:
                     raise ConfigError("Geçersiz durum")
@@ -339,20 +351,22 @@ class Registry:
         with self.db:
             self.db.execute(
                 "INSERT INTO products(tenant,id,title,description,stars,content,kind,photo_url,category,badge,channel_id,"
-                "access_days,includes,stock,sale_until,compare_at,upsell,upsell_percent,grp,option,position,archived,updated) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?) "
+                "access_days,includes,stock,sale_until,compare_at,upsell,upsell_percent,grp,option,ask,flexible,position,archived,updated) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?) "
                 "ON CONFLICT(tenant,id) DO UPDATE SET "
                 "title=excluded.title, description=excluded.description, stars=excluded.stars, "
                 "content=excluded.content, kind=excluded.kind, photo_url=excluded.photo_url, "
                 "category=excluded.category, badge=excluded.badge, channel_id=excluded.channel_id, "
                 "access_days=excluded.access_days, includes=excluded.includes, stock=excluded.stock, "
                 "sale_until=excluded.sale_until, compare_at=excluded.compare_at, upsell=excluded.upsell, "
-                "upsell_percent=excluded.upsell_percent, grp=excluded.grp, option=excluded.option, archived=0, "
+                "upsell_percent=excluded.upsell_percent, grp=excluded.grp, option=excluded.option, "
+                "ask=excluded.ask, flexible=excluded.flexible, archived=0, "
                 "updated=excluded.updated, position=COALESCE(?, products.position)",
                 (tenant_id, product.id, product.title, product.description, product.stars, product.content,
                  product.kind, product.photo_url, product.category, product.badge, product.channel_id,
                  product.access_days, ",".join(product.includes) or None, product.stock, product.sale_until,
-                 product.compare_at, product.upsell, product.upsell_percent, product.group, product.option, position or 0, time.time(), position),
+                 product.compare_at, product.upsell, product.upsell_percent, product.group, product.option, product.ask,
+                 int(product.flexible), position or 0, time.time(), position),
             )
         return product
 
@@ -370,7 +384,7 @@ class Registry:
                                  r["kind"], r["photo_url"], r["category"], r["badge"], r["channel_id"],
                                  r["access_days"], tuple(filter(None, (r["includes"] or "").split(","))),
                                  r["stock"], r["sale_until"], r["compare_at"], r["upsell"], r["upsell_percent"],
-                                 r["grp"], r["option"])
+                                 r["grp"], r["option"], r["ask"], bool(r["flexible"]))
                 for r in rows}
 
     # runtime settings ------------------------------------------------------------
@@ -393,6 +407,8 @@ class Registry:
             admin_url=f"https://t.me/{self.hub.bot_username}?start=panel" if self.hub.bot_username else "",
             buy_url=f"https://t.me/{self.hub.bot_username}?start=lisans" if self.hub.bot_username else "",
             referral_percent=tenant["referral_percent"],
+            cart_discount=tenant["cart_discount"],
+            sale_webhook=tenant["sale_webhook"] or "",
         )
 
     def store_path(self, tenant_id: str) -> Path:
@@ -408,7 +424,8 @@ def public_tenant(tenant: sqlite3.Row, hub: HubSettings) -> dict:
         "id": tenant["id"], "username": tenant["username"], "shop_name": tenant["shop_name"],
         "support_text": tenant["support_text"], "terms_text": tenant["terms_text"],
         "sales_enabled": bool(tenant["sales_enabled"]), "status": tenant["status"],
-        "referral_percent": tenant["referral_percent"],
+        "referral_percent": tenant["referral_percent"], "cart_discount": tenant["cart_discount"],
+        "sale_webhook": tenant["sale_webhook"],
         "mode": "forward" if tenant["forward_url"] else "standalone",
         "forward_url": tenant["forward_url"], "forward_secret_set": bool(tenant["forward_secret"]),
         "shop_url": hub.shop_url(tenant["username"]),

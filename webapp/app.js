@@ -28,6 +28,8 @@
       share_text: "{title} · ⭐ {n}", per_month: "/ 30 gün", admin: "⚙️ Yönetim",
       foot_admin: "Yönetim paneli", foot_license: "Lisans yönetimi", foot_buy: "Sen de mağaza aç",
       from_price: "{n}+", n_options: "{n} seçenek",
+      amount_label: "Tutarı sen seç (en az ⭐{n})", ask_placeholder: "Cevabın", ask_needed: "Önce soruyu cevapla.",
+      amount_low: "Tutar en az ⭐{n} olmalı.", flexible_tag: "İstediğin kadar öde",
       bundle_tag: "Paket", fact_bundle: "Pakette: {list}. Ayrı ayrı ⭐ {n}; paketle ⭐ {save} kazanırsın.",
       fact_bundle_plain: "Pakette: {list}. Hepsi tek ödemeyle açılır.",
       left_n: "Son {n}", sold_out: "Tükendi", fact_left: "Sınırlı sayıda: {n} adet kaldı.",
@@ -65,6 +67,8 @@
       share_text: "{title} · ⭐ {n}", per_month: "/ 30 days", admin: "⚙️ Admin",
       foot_admin: "Admin panel", foot_license: "License", foot_buy: "Open your own shop",
       from_price: "from {n}", n_options: "{n} options",
+      amount_label: "Choose the amount (at least ⭐{n})", ask_placeholder: "Your answer", ask_needed: "Please answer the question first.",
+      amount_low: "The amount must be at least ⭐{n}.", flexible_tag: "Pay what you want",
       bundle_tag: "Bundle", fact_bundle: "Includes: {list}. Separately ⭐ {n}; you save ⭐ {save}.",
       fact_bundle_plain: "Includes: {list}. All unlocked with one payment.",
       left_n: "{n} left", sold_out: "Sold out", fact_left: "Limited: {n} left.",
@@ -312,6 +316,7 @@
     if (product.channel) tags.push(el("span", "badge", t("channel_tag")));
     if (product.access_days) tags.push(el("span", "badge", t("days_tag", { n: product.access_days })));
     if ((product.includes || []).length) tags.push(el("span", "badge", t("bundle_tag")));
+    if (product.flexible) tags.push(el("span", "badge", t("flexible_tag")));
     const hint = !isOwned && scarcity(product);
     if (hint) tags.push(hint);
     if (isOwned) tags.push(el("span", "badge ok", t("yours")));
@@ -361,6 +366,23 @@
     if (soldOut) $("promo-box").hidden = true;
     $("detail-share").hidden = !config.bot_username;
     $("detail-gift").hidden = soldOut || product.kind === "subscription";
+    $("ask-box").hidden = isOwned || soldOut || !product.ask;
+    $("ask-label").textContent = product.ask || "";
+    $("ask-input").value = "";
+    const flexible = !isOwned && !soldOut && product.flexible;
+    $("amount-box").hidden = !flexible;
+    if (flexible) {
+      $("promo-box").hidden = true;
+      $("amount-box").querySelector(".field-label").textContent = t("amount_label", { n: product.stars });
+      $("amount-input").min = String(product.stars);
+      setAmount(product.stars);
+      $("amount-chips").replaceChildren(...[1, 2, 5, 10].map((k) => {
+        const chip = el("button", "chip", `⭐${product.stars * k}`);
+        chip.type = "button";
+        chip.addEventListener("click", () => { haptic("select"); setAmount(product.stars * k); });
+        return chip;
+      }));
+    }
     $("detail-wait").hidden = !soldOut;
     $("detail-wait").disabled = false;
     loadReviews(product);
@@ -368,6 +390,16 @@
     show("detail");
     soldOut ? hideMainButton() : showMainButton(label);
     if (promoCode && !isOwned && !soldOut && product.kind !== "subscription") applyPromo(true);
+  }
+
+  function setAmount(n) {
+    $("amount-input").value = String(n);
+    $("amount-chips").querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c.textContent === `⭐${n}`));
+    if (current && !owned.has(current.id)) {
+      const label = t("buy_for", { n });
+      $("detail-buy").textContent = label;
+      showMainButton(label);
+    }
   }
 
   // ---------------------------------------------------------------- reviews
@@ -580,11 +612,22 @@
   // ---------------------------------------------------------------- purchase
   async function buy(product, gift = false) {
     if (!tg) return;
+    const answer = product.ask ? $("ask-input").value.trim() : null;
+    if (product.ask && !answer) {
+      toast(t("ask_needed"));
+      $("ask-input").focus();
+      return;
+    }
+    let amount = null;
+    if (product.flexible) {
+      amount = parseInt($("amount-input").value, 10);
+      if (!(amount >= product.stars)) { toast(t("amount_low", { n: product.stars })); return; }
+    }
     busy(true);
     haptic("medium");
     try {
       const { order_id: orderId, invoice_link: link } = await api("/api/orders", {
-        method: "POST", body: JSON.stringify({ product_id: product.id, code: quote ? quote.code : null, gift }),
+        method: "POST", body: JSON.stringify({ product_id: product.id, code: quote ? quote.code : null, gift, answer, amount }),
       });
       tg.openInvoice(link, async (status) => {
         busy(false);
@@ -667,6 +710,10 @@
     $("detail-wait").addEventListener("click", joinWaitlist);
     $("detail-rating").addEventListener("click", () => $("reviews").scrollIntoView({ behavior: "smooth" }));
     $("review-form").addEventListener("submit", sendReview);
+    $("amount-input").addEventListener("input", () => {
+      const n = parseInt($("amount-input").value, 10);
+      if (n > 0) setAmount(n);
+    });
     $("promo-apply").addEventListener("click", () => applyPromo(false));
     $("promo-code").addEventListener("keydown", (event) => { if (event.key === "Enter") applyPromo(false); });
     document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {

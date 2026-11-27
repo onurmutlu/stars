@@ -126,11 +126,14 @@ class StarsShop:
             raise ShopError("Bu kod bu ürün için geçerli değil.")
         if product.kind == "subscription":
             raise ShopError("İndirim kodu aboneliklerde kullanılamıyor.")
+        if product.flexible:
+            raise ShopError("Bu üründe tutarı sen seçiyorsun; indirim kodu geçmez.")
         stars = max(1, -(-product.stars * (100 - promo["percent"]) // 100))  # round up, never below 1 Star
         return {"product": product.id, "stars": stars, "original": product.stars, "percent": promo["percent"],
                 "code": promo["code"]}
 
-    async def create_invoice(self, user: int, product_id: str, code: str | None = None, gift: bool = False) -> dict:
+    async def create_invoice(self, user: int, product_id: str, code: str | None = None, gift: bool = False,
+                             answer: str | None = None, amount: int | None = None) -> dict:
         if not self.settings.sales_enabled:
             raise ShopError("Satış şu an kapalı.", 403)
         product = self.products.get(product_id)
@@ -143,8 +146,16 @@ class StarsShop:
         reason, _ = self.availability(product)
         if reason:
             raise ShopError(reason, 409)
+        answer = (answer or "").strip()[:300] or None
+        if product.ask and not answer:
+            raise ShopError(f"Önce şu soruyu cevapla: {product.ask}")
         price = self.quote(product.id, code)
-        order_id = self.store.create_order(user, product, stars=price["stars"], promo=price["code"], gift=gift)
+        if product.flexible and amount is not None:
+            if not product.stars <= amount <= 100000:
+                raise ShopError(f"Tutar en az ⭐{product.stars} olmalı.")
+            price = {**price, "stars": int(amount)}
+        order_id = self.store.create_order(user, product, stars=price["stars"], promo=price["code"], gift=gift,
+                                           answer=answer if product.ask else None)
         extra = {"subscription_period": SUBSCRIPTION_PERIOD} if product.kind == "subscription" else {}
         if self.store.product_photo(product.id):
             extra["photo_url"] = f"{self.settings.webapp_url}/api/photo/{product.id}"
@@ -638,33 +649,54 @@ class StarsShop:
         return sent
 
     # ------------------------------------------------------------------ announcements
-    def broadcast_state(self, now: float | None = None) -> dict:
+    SEGMENTS = {"hepsi": "Herkes", "alicilar": "Satın alanlar", "ziyaretciler": "Henüz almayanlar",
+                "sepet": "Siparişi yarım kalanlar"}
+
+    def segment_label(self, segment: str | None) -> str:
+        if segment and segment.startswith("urun:"):
+            product = self.products.get(segment[5:])
+            return f"'{product.title if product else segment[5:]}' alanlar"
+        return self.SEGMENTS.get(segment or "hepsi", segment or "Herkes")
+
+    def _segment(self, segment: str | None) -> str | None:
+        segment = (segment or "hepsi").strip().lower()
+        if segment in self.SEGMENTS or (segment.startswith("urun:") and segment[5:] in self.products):
+            return None if segment == "hepsi" else segment
+        raise ShopError("Kitle: hepsi, alicilar, ziyaretciler, sepet ya da urun:<ürün-kimliği> olmalı.")
+
+    def audience(self, segment: str | None = None) -> list[int]:
+        return self.store.audience(self.settings.admin_ids, self._segment(segment))
+
+    def broadcast_state(self, now: float | None = None, segment: str | None = None) -> dict:
         now = time.time() if now is None else now
         last = self.store.last_broadcast()
         next_allowed = (last["confirmed"] + BROADCAST_GAP) if last else None
-        return {"audience": len(self.store.audience(self.settings.admin_ids)),
+        return {"audience": len(self.audience(segment)), "segment": self._segment(segment) or "hepsi",
+                "segments": [{"id": k, "label": v} for k, v in self.SEGMENTS.items()]
+                + [{"id": f"urun:{p}", "label": self.segment_label(f"urun:{p}")} for p in self.products],
                 "next_allowed": next_allowed if next_allowed and next_allowed > now else None,
                 "history": self.store.broadcasts()}
 
-    def _check_broadcast(self, text: str, now: float) -> None:
+    def _check_broadcast(self, text: str, now: float, segment: str | None = None) -> None:
         if not text or len(text) > 3500:
             raise ShopError("Duyuru metni 1–3500 karakter olmalı.")
         if self.store.sending_broadcast():
             raise ShopError("Önceki duyuru hâlâ gönderiliyor.")
-        state = self.broadcast_state(now)
+        state = self.broadcast_state(now, segment)
         if state["next_allowed"]:
             hours = max(1, round((state["next_allowed"] - now) / 3600))
             raise ShopError(f"Günde en fazla bir duyuru gönderilebilir. Yaklaşık {hours} saat sonra tekrar dene.")
         if not state["audience"]:
-            raise ShopError("Duyuru gidecek kimse yok: henüz kimse botunla konuşmadı (ya da hepsi /durdur dedi).")
+            raise ShopError("Duyuru gidecek kimse yok: bu kitlede kimse yok (ya da hepsi /durdur dedi).")
 
-    def start_broadcast(self, text: str, now: float | None = None) -> int:
+    def start_broadcast(self, text: str, now: float | None = None, segment: str | None = None) -> int:
         """Queue an announcement right away (the panel asks for confirmation itself)."""
         now = time.time() if now is None else now
         text = (text or "").strip()
-        self._check_broadcast(text, now)
-        broadcast_id = self.store.create_broadcast(text)
-        return self.store.confirm_broadcast(broadcast_id, self.store.audience(self.settings.admin_ids))
+        segment = self._segment(segment)
+        self._check_broadcast(text, now, segment)
+        broadcast_id = self.store.create_broadcast(text, segment)
+        return self.store.confirm_broadcast(broadcast_id, self.audience(segment))
 
     async def send_broadcasts(self, now: float | None = None) -> int:
         current = self.store.sending_broadcast()
@@ -728,14 +760,24 @@ class StarsShop:
         sent = 0
         for order in self.store.abandoned_orders(now):
             self.store.mark_reminded(order["id"])
-            if order["product"] not in self.products:
+            product = self.products.get(order["product"])
+            if not product:
                 continue
+            text = f"'{order['title']}' siparişin yarım kaldı. Hâlâ istiyorsan tek dokunuşla tamamlayabilirsin."
+            url = f"{self.settings.webapp_url}/app?p={order['product']}"
+            price = order["stars"]
+            percent = self.settings.cart_discount
+            if percent and product.kind != "subscription" and not product.flexible and not order["promo"]:
+                code = "SEPET" + secrets.token_hex(3).upper()
+                self.store.save_promo(code, percent, product=product.id, max_uses=1, expires=now + 24 * 3600)
+                price = max(1, -(-product.stars * (100 - percent) // 100))
+                text = (f"'{order['title']}' siparişin yarım kaldı. Sana özel %{percent} indirim: ⭐{product.stars} yerine "
+                        f"⭐{price}. Kod: {code} (24 saat, tek kullanım).")
+                url += f"&code={code}"
             try:
                 await self.api(
-                    "sendMessage", chat_id=order["user"],
-                    text=f"'{order['title']}' siparişin yarım kaldı. Hâlâ istiyorsan tek dokunuşla tamamlayabilirsin.",
-                    reply_markup={"inline_keyboard": [[{"text": f"⭐ {order['stars']} ile tamamla",
-                                                        "web_app": {"url": f"{self.settings.webapp_url}/app?p={order['product']}"}}]]})
+                    "sendMessage", chat_id=order["user"], text=text,
+                    reply_markup={"inline_keyboard": [[{"text": f"⭐ {price} ile tamamla", "web_app": {"url": url}}]]})
                 sent += 1
             except Exception as exc:  # noqa: BLE001
                 log.info("Sepet hatırlatması gönderilemedi: %s", type(exc).__name__)
@@ -793,6 +835,8 @@ class StarsShop:
         self.store.add_payment(charge, order, expires, bool(payment.get("is_recurring")))
         if order["promo"] and not renewal:
             self.store.count_promo_use(order["promo"])
+        if order["stars"] > 0 and self.settings.sale_webhook:
+            await self._sale_webhook(order, charge, sender, renewal=bool(self.store.live_payments(order["id"])[1:]))
         if order["stars"] > 0 and self.store.paid_count(user) == 1:
             await self._reward_referrer(user)
         if order["gift"]:
@@ -806,7 +850,8 @@ class StarsShop:
             kind = "🔁 Abonelik yenilendi" if renewal or payment.get("is_recurring") and not payment.get("is_first_recurring") \
                 else "💰 Yeni satış"
             until = f"\nBitiş: {time.strftime('%d.%m.%Y', time.localtime(expires))}" if expires else ""
-            await self.notify_admins(f"{kind}: {order['title']} · ⭐{order['stars']}\nAlıcı: {_who(sender or {'id': user})}{until}")
+            asked = f"\nCevap: {order['answer']}" if order["answer"] else ""
+            await self.notify_admins(f"{kind}: {order['title']} · ⭐{order['stars']}\nAlıcı: {_who(sender or {'id': user})}{until}{asked}")
         if not renewal:
             await self._offer_upsell(user, order)
 
@@ -823,10 +868,11 @@ class StarsShop:
 
         sales = table(
             ["tarih", "ürün", "başlık", "tür", "yıldız", "kod", "durum", "bitiş", "kullanıcı", "ad", "kullanıcı_adı",
-             "kaynak", "sipariş", "ödeme"],
+             "kaynak", "cevap", "sipariş", "ödeme"],
             ([day(r["created"]), r["product"], r["title"], r["kind"], r["stars"], r["promo"] or "",
               "iade" if r["refunded"] else ("paket" if r["stars"] == 0 else "ödendi"), day(r["expires"]),
-              r["user"], r["name"] or "", r["username"] or "", r["source"] or "", r["order_id"], r["charge"]]
+              r["user"], r["name"] or "", r["username"] or "", r["source"] or "", r["answer"] or "",
+              r["order_id"], r["charge"]]
              for r in self.store.sales_rows()))
         customers = table(
             ["kullanıcı", "ad", "kullanıcı_adı", "aşama", "harcanan_yıldız", "ödeme", "kaynak", "not", "ilk", "son"],
@@ -840,6 +886,31 @@ class StarsShop:
         for name, body in self.reports().items():
             await self.api("sendDocument", chat_id=chat_id, files={"document": (f"{stamp}-{name}", body)},
                            caption=f"{self.settings.shop_name} · {name.removesuffix('.csv')}")
+
+    # ------------------------------------------------------------------ sale webhook
+    async def _sale_webhook(self, order, charge: str, sender: dict | None, renewal: bool) -> None:
+        """POST the sale as JSON to the seller's URL (Zapier, Make, Google Apps Script…). Never blocks a payment."""
+        sender = sender or {}
+        payload = {
+            "event": "renewal" if renewal else "sale", "shop": self.settings.shop_name,
+            "order_id": order["id"], "charge_id": charge, "product": order["product"], "title": order["title"],
+            "kind": order["kind"], "stars": order["stars"], "promo": order["promo"], "gift": bool(order["gift"]),
+            "answer": order["answer"], "user_id": order["user"], "username": sender.get("username"),
+            "name": " ".join(x for x in (sender.get("first_name"), sender.get("last_name")) if x) or None,
+            "time": int(time.time()),
+        }
+        try:
+            await self.post_json(self.settings.sale_webhook, payload)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Satış webhook'u gönderilemedi: %s", type(exc).__name__)
+
+    async def post_json(self, url: str, payload: dict) -> None:
+        if not url.startswith("https://"):
+            raise ValueError("https gerekli")
+        import httpx
+        async with httpx.AsyncClient(timeout=5, follow_redirects=False) as client:
+            response = await client.post(url, json=payload, headers={"User-Agent": "StarsShop/1"})
+            response.raise_for_status()
 
     # ------------------------------------------------------------------ gifts
     async def _gift_paid(self, order, sender: dict | None) -> None:
@@ -1081,27 +1152,36 @@ class StarsShop:
             self.store.set_opt_out(user, False)
             reply = "Duyurular tekrar açık."
         elif command == "/duyuru" and user in self.settings.admin_ids:
+            segment, body = None, argument
+            if argument.startswith("@"):
+                segment, _, body = argument[1:].partition(" ")
+                body = body.strip()
             try:
-                self._check_broadcast(argument, time.time())
+                segment = self._segment(segment)
+                self._check_broadcast(body, time.time(), segment)
             except ShopError as exc:
-                reply = str(exc) if argument else ("Kullanım: /duyuru <metin>\nBotunla konuşmuş herkese gider; "
-                                                   "günde en fazla bir duyuru. Önce önizleme gösterilir.")
+                reply = str(exc) if body else (
+                    "Kullanım: /duyuru <metin> — botunla konuşmuş herkese.\n"
+                    "Kitle seçmek için: /duyuru @alicilar <metin> · @ziyaretciler · @sepet · @urun:<ürün-kimliği>\n"
+                    "Günde en fazla bir duyuru; önce önizleme gösterilir.")
             else:
-                self.store.create_broadcast(argument)
-                count = len(self.store.audience(self.settings.admin_ids))
-                await self.api("sendMessage", chat_id=user, text=argument + BROADCAST_FOOTER)
-                reply = (f"↑ Önizleme. {count} kişiye gidecek.\nGöndermek için /duyuru_onay, vazgeçmek için /duyuru_iptal.")
+                self.store.create_broadcast(body, segment)
+                count = len(self.audience(segment))
+                await self.api("sendMessage", chat_id=user, text=body + BROADCAST_FOOTER)
+                reply = (f"↑ Önizleme. Kitle: {self.segment_label(segment)} · {count} kişi.\n"
+                         "Göndermek için /duyuru_onay, vazgeçmek için /duyuru_iptal.")
         elif command == "/duyuru_onay" and user in self.settings.admin_ids:
             pending = self.store.pending_broadcast()
             if not pending:
                 reply = "Onay bekleyen duyuru yok. Önce /duyuru <metin> yaz."
             else:
+                segment = pending["segment"]
                 try:
-                    self._check_broadcast(pending["text"], time.time())
+                    self._check_broadcast(pending["text"], time.time(), segment)
                 except ShopError as exc:
                     reply = str(exc)
                 else:
-                    count = self.store.confirm_broadcast(pending["id"], self.store.audience(self.settings.admin_ids))
+                    count = self.store.confirm_broadcast(pending["id"], self.store.audience(self.settings.admin_ids, segment))
                     reply = f"📣 {count} kişiye gönderiliyor. Bitince haber vereceğim."
         elif command == "/duyuru_iptal" and user in self.settings.admin_ids:
             reply = "Duyuru iptal edildi." if self.store.cancel_broadcast() else "İptal edilecek duyuru yok."

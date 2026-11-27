@@ -602,7 +602,7 @@ def test_broadcast_preview_confirm_send_opt_out_and_daily_limit(client, api, sto
     assert "artık duyuru almayacaksın" in api.of("sendMessage")[-1]["text"]
     hook(client, text("/duyuru Yeni deneme paketi çıktı!", user_id=ADMIN, update_id=51))
     preview, info = api.of("sendMessage")[-2:]
-    assert preview["chat_id"] == ADMIN and "/durdur" in preview["text"] and "2 kişiye" in info["text"]
+    assert preview["chat_id"] == ADMIN and "/durdur" in preview["text"] and "2 kişi" in info["text"]
     hook(client, text("/duyuru_onay", user_id=ADMIN, update_id=52))
     assert "2 kişiye gönderiliyor" in api.of("sendMessage")[-1]["text"]
 
@@ -970,3 +970,74 @@ def test_daily_sales_series_and_top_products(client, store):
     data = store.daily_sales(30)
     assert len(data["days"]) == 30 and data["stars"][-1] == 50 and data["sales"][-1] == 1
     assert data["top"][0]["product"] == "guide" and data["total_stars"] == 50
+
+
+# ------------------------------------------------------------------ segments, questions, flexible price, cart code, webhook
+def test_announcement_to_a_segment(client, api, store):
+    THIRD = 3003
+    for uid, upd in ((BUYER, 120), (OTHER, 121), (THIRD, 122)):
+        hook(client, text("/start", user_id=uid, update_id=upd))
+    hook(client, paid(order(client), update_id=123))                  # BUYER bought guide
+    order(client, "guide", user=OTHER)                                 # OTHER left an order unpaid
+    shop = client.shop
+    assert set(shop.audience("alicilar")) == {BUYER}
+    assert set(shop.audience("ziyaretciler")) == {OTHER, THIRD}
+    assert set(shop.audience("sepet")) == {OTHER}
+    assert set(shop.audience("urun:guide")) == {BUYER} and shop.audience("urun:club") == []
+    with pytest.raises(Exception):
+        shop.audience("urun:yok")
+    hook(client, text("/duyuru @alicilar Yeni sürüm geldi", user_id=ADMIN, update_id=124))
+    assert "Satın alanlar · 1 kişi" in api.of("sendMessage")[-1]["text"]
+    hook(client, text("/duyuru_onay", user_id=ADMIN, update_id=125))
+    asyncio.run(shop.send_broadcasts())
+    got = [m["chat_id"] for m in api.of("sendMessage") if m["text"].startswith("Yeni sürüm geldi")]
+    assert got == [ADMIN, BUYER]                                       # preview + the one buyer
+
+
+def test_question_answer_is_required_and_reaches_the_admin(api, store):
+    from app.config import Product
+    products = {"seans": Product("seans", "Seans", "d", 20, "Randevu linki", ask="Hangi gün uygunsun?")}
+    with shop_with(api, store, products, notify_sales=True) as client:
+        assert client.post("/api/orders", json={"product_id": "seans"}, headers=headers()).status_code == 400
+        r = client.post("/api/orders", json={"product_id": "seans", "answer": "Salı akşam"}, headers=headers())
+        hook(client, paid(r.json()["order_id"], amount=20, update_id=126))
+        assert any("Cevap: Salı akşam" in m["text"] for m in api.of("sendMessage") if m["chat_id"] == ADMIN)
+        assert store.sales_rows()[0]["answer"] == "Salı akşam"
+
+
+def test_pay_what_you_want(api, store):
+    from app.config import Product
+    products = {"destek": Product("destek", "Destek ol", "d", 10, "Teşekkürler", flexible=True)}
+    with shop_with(api, store, products) as client:
+        assert client.post("/api/orders", json={"product_id": "destek", "amount": 5}, headers=headers()).status_code == 400
+        r = client.post("/api/orders", json={"product_id": "destek", "amount": 75}, headers=headers())
+        assert api.of("createInvoiceLink")[-1]["prices"][0]["amount"] == 75
+        hook(client, paid(r.json()["order_id"], amount=75, update_id=127))
+        assert store.paid_orders(BUYER)[0]["stars"] == 75
+        store.save_promo("YAZ", 20)
+        assert client.get("/api/quote", params={"product_id": "destek", "code": "YAZ"}).status_code == 400
+        assert {p["id"]: p for p in client.get("/api/products").json()}["destek"]["flexible"] is True
+
+
+def test_cart_reminder_can_carry_a_discount(api, store):
+    with shop_with(api, store, __import__("tests.conftest", fromlist=["PRODUCTS"]).PRODUCTS, cart_discount=10) as client:
+        order(client)
+        assert asyncio.run(client.app.state.shop.remind_carts(time.time() + 3700)) == 1
+        message = api.of("sendMessage")[-1]
+        assert "%10" in message["text"] and "⭐45" in message["text"]
+        url = message["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"]
+        assert client.get("/api/quote", params={"product_id": "guide", "code": url.split("code=")[1]}).json()["stars"] == 45
+
+
+def test_sale_webhook_gets_json_and_never_breaks_a_payment(api, store):
+    from tests.conftest import PRODUCTS
+    with shop_with(api, store, PRODUCTS, sale_webhook="https://hooks.example.com/x") as client:
+        posted = []
+        async def post(url, payload):
+            posted.append((url, payload))
+            raise RuntimeError("down")
+        client.app.state.shop.post_json = post
+        hook(client, paid(order(client), update_id=128))
+        assert posted[0][0] == "https://hooks.example.com/x"
+        assert posted[0][1]["event"] == "sale" and posted[0][1]["stars"] == 50 and posted[0][1]["product"] == "guide"
+        assert store.paid_orders(BUYER)                                # the failing hook did not lose the sale

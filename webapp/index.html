@@ -54,6 +54,15 @@
             <button class="btn ghost" id="promo-apply" data-i18n="promo_apply">Uygula</button>
           </div>
           <p class="promo-note" id="promo-note" hidden></p>
+          <div class="amount-box" id="amount-box" hidden>
+            <span class="field-label" data-i18n="amount_label">Tutarı sen seç</span>
+            <div class="amount-row" id="amount-chips"></div>
+            <input id="amount-input" class="promo-input" type="number" inputmode="numeric" min="1" max="100000">
+          </div>
+          <label class="ask-box" id="ask-box" hidden>
+            <span class="field-label" id="ask-label"></span>
+            <textarea id="ask-input" rows="2" maxlength="300" data-i18n-placeholder="ask_placeholder"></textarea>
+          </label>
           <div class="detail-actions">
             <button class="btn wide" id="detail-buy"></button>
             <button class="btn ghost wide" id="detail-gift" hidden data-i18n="gift_buy">🎁 Hediye et</button>

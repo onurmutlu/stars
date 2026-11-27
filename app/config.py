@@ -40,6 +40,8 @@ class Product:
     upsell_percent: int | None = None  # ...with this discount (a one-use code, 48 hours)
     group: str | None = None       # products with the same group are options of one card ("Kurs")
     option: str | None = None      # this product's option label in the group ("7 gün", "30 gün")
+    ask: str | None = None         # a question the buyer answers before paying ("E-posta adresin?")
+    flexible: bool = False         # pay what you want: stars is the minimum, the buyer may pay more
 
     def public(self) -> dict:
         """What the Mini App may see before payment: never the content."""
@@ -60,6 +62,8 @@ class Product:
             "compare_at": self.compare_at,
             "group": self.group,
             "option": self.option,
+            "ask": self.ask,
+            "flexible": self.flexible,
         }
 
 def _optional_text(value):
@@ -137,6 +141,8 @@ def validate_product(item: dict) -> Product:
         upsell_percent=_optional_int(item.get("upsell_percent")),
         group=_optional_text(item.get("group")),
         option=_optional_text(item.get("option")),
+        ask=_optional_text(item.get("ask")),
+        flexible=item.get("flexible") in (True, 1, "1", "true", "on"),
     )
     if not isinstance(product.id, str) or not PRODUCT_ID.match(product.id):
         raise ConfigError(f"Geçersiz ürün id: {product.id!r} (a-z, 0-9, _ ve -; en fazla 32)")
@@ -192,6 +198,10 @@ def validate_product(item: dict) -> Product:
             raise ConfigError(f"{product.id}: seçenek adı için grup da yaz (ör. grup 'Kurs', seçenek '30 gün')")
     if product.group is not None and product.option is None:
         raise ConfigError(f"{product.id}: grupta her ürünün bir seçenek adı olmalı (ör. '7 gün')")
+    if product.ask is not None and (not isinstance(product.ask, str) or len(product.ask) > 80):
+        raise ConfigError(f"{product.id}: alıcıya sorulacak soru en fazla 80 karakter olmalı")
+    if product.flexible and product.kind == "subscription":
+        raise ConfigError(f"{product.id}: abonelikte 'istediğin kadar öde' kullanılamaz")
     if product.includes:
         if not isinstance(product.includes, tuple) or len(product.includes) > 10 or len(set(product.includes)) != len(product.includes):
             raise ConfigError(f"{product.id}: paket en fazla 10 farklı ürün kimliği içerebilir")
@@ -258,6 +268,8 @@ class Settings:
     notify_sales: bool = True           # DM admins on every sale, renewal and refund
     summary_hour: int = 9               # local hour of the daily summary to admins; -1 turns it off
     cart_reminder: bool = True          # one reminder to a buyer who left an order unpaid for an hour
+    cart_discount: int = 0              # 1..90: the unpaid-order reminder carries a one-use code for this product
+    sale_webhook: str = ""              # https URL that gets a JSON POST for every sale (Zapier, Make, Sheets…)
     review_request: bool = True         # a day after a purchase, ask the buyer for a rating
     referral_percent: int = 0           # 1..90: a buyer whose friend makes a first purchase gets a code; 0 = off
 
@@ -287,6 +299,8 @@ class Settings:
             notify_sales=os.getenv("NOTIFY_SALES", "true").strip().lower() not in ("0", "false", "no", "off"),
             summary_hour=int(os.getenv("DAILY_SUMMARY_HOUR", "9")),
             cart_reminder=os.getenv("CART_REMINDER", "true").strip().lower() not in ("0", "false", "no", "off"),
+            cart_discount=max(0, min(90, int(os.getenv("CART_DISCOUNT", "0") or 0))),
+            sale_webhook=os.getenv("SALE_WEBHOOK_URL", "").strip(),
             review_request=os.getenv("REVIEW_REQUEST", "true").strip().lower() not in ("0", "false", "no", "off"),
             referral_percent=max(0, min(90, int(os.getenv("REFERRAL_PERCENT", "0") or 0))),
             checkout_urls=tuple(

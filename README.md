@@ -167,6 +167,19 @@ gösterir, ürün sayfasında seçenek düğmeleriyle geçilir. Stok, kod, hediy
 
 **Satış grafiği:** Hub panelinde son 30 günün günlük ⭐ grafiği ve en çok satan 5 ürün.
 
+**Alıcıya soru:** Ürüne `ask: "Hangi gün uygunsun?"` ver: Mini App ödemeden önce cevabı ister. Cevap satış bildiriminde,
+panelde son ödemelerde, CSV'de ve webhook'ta görünür. Hizmet, randevu ve kişiye özel ürünler için.
+
+**İstediğin kadar öde:** `flexible: true` ile fiyat en az tutar olur; alıcı ⭐25 / 50 / 125 / 250 gibi hazır tutarlardan
+birini ya da kendi tutarını seçer. Bağış, destek, bahşiş için. İndirim kodu geçmez, abonelikte kullanılamaz.
+
+**Yarım sipariş indirimi:** `CART_DISCOUNT=10` (Hub'da mağaza ayarı) ile bir saat sonra giden "siparişin yarım kaldı"
+mesajına o ürüne özel, 24 saat geçerli, tek kullanımlık %10 kod eklenir.
+
+**Satış webhook'u:** `SALE_WEBHOOK_URL=https://...` (Hub'da mağaza ayarı) ile her ödemede bu adrese JSON gider:
+`event` (sale/renewal), `product`, `title`, `stars`, `promo`, `gift`, `answer`, `user_id`, `username`, `name`, `time`.
+Zapier, Make ya da Google Apps Script ile tabloya yazmak için. Adres çalışmazsa satış etkilenmez.
+
 **CSV rapor:** `/rapor` (ya da Hub panelinde "CSV raporu bota gönder") satislar.csv ve musteriler.csv dosyalarını bot
 sohbetine gönderir; Excel Türkçe karakterleri doğru açar (UTF-8 BOM, `;` ayraç).
 
@@ -174,7 +187,8 @@ sohbetine gönderir; Excel Türkçe karakterleri doğru açar (UTF-8 BOM, `;` ay
 Alıcı Mini App'te kodu yazar ya da `t.me/<bot>?start=kod_YAZ20` kampanya linkiyle gelir (kod otomatik uygulanır).
 Kodlar aboneliklerde geçmez; indirimli fiyat yukarı yuvarlanır, en az 1 ⭐.
 
-**Duyuru:** `/duyuru <metin>` önizleme gösterir, `/duyuru_onay` gönderir, `/duyuru_iptal` vazgeçer. Sadece botla konuşmuş
+**Duyuru:** `/duyuru <metin>` (herkese) ya da `/duyuru @alicilar <metin>`, `@ziyaretciler`, `@sepet`, `@urun:<ürün>`
+ile bir kitleye; panelde "Kimlere" seçimi aynı işi yapar. Önizleme gösterilir, `/duyuru_onay` gönderir, `/duyuru_iptal` vazgeçer. Sadece botla konuşmuş
 kişilere gider, günde en fazla bir duyuru, her mesajın altında `/durdur` (çıkış) ve `/baslat` (geri açma) var. Botu
 engelleyenler listeden düşer. Gönderim saniyede ~25 mesajla arka planda yapılır, bitince yöneticiye rapor gelir.
 

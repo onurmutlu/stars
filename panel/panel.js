@@ -177,6 +177,7 @@
     show("shop");
     loadCustomers().catch((error) => toast(error.message));
     loadPromos().catch(() => {});
+    $("bc-segment").replaceChildren();
     loadBroadcast().catch(() => {});
     loadSources().catch(() => {});
     loadSales().catch(() => {});
@@ -285,13 +286,19 @@
 
   // ---------------------------------------------------------------- announcements
   async function loadBroadcast() {
-    renderBroadcast(await api(`/panel/api/shops/${shop.id}/broadcast`));
+    const segment = $("bc-segment").value || "hepsi";
+    renderBroadcast(await api(`/panel/api/shops/${shop.id}/broadcast?segment=${encodeURIComponent(segment)}`));
   }
 
   function renderBroadcast(state) {
     broadcastState = state;
+    const select = $("bc-segment");
+    if ([...select.options].map((o) => o.value).join() !== state.segments.map((g) => g.id).join()) {
+      select.replaceChildren(...state.segments.map((g) => Object.assign(el("option", "", g.label), { value: g.id })));
+    }
+    select.value = state.segment;
     const wait = state.next_allowed ? ` Sonraki duyuru: ${new Date(state.next_allowed * 1000).toLocaleString("tr-TR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.` : "";
-    $("bc-info").textContent = `${fmtNum(state.audience)} kişiye gider (botunla konuşmuş, /durdur dememiş). Günde en fazla bir duyuru.${wait}`;
+    $("bc-info").textContent = `${fmtNum(state.audience)} kişiye gider (bu kitlede, /durdur dememiş). Günde en fazla bir duyuru.${wait}`;
     $("bc-send").disabled = Boolean(state.next_allowed) || !state.audience;
     $("broadcasts").replaceChildren(...state.history.map((b) => {
       const card = el("article", "card pay-item");
@@ -309,7 +316,7 @@
     const text = $("bc-text").value.trim();
     if (!text) return toast("Önce duyuru metnini yaz.");
     if (!(await confirmBox(`Bu duyuru ${fmtNum(broadcastState ? broadcastState.audience : 0)} kişiye gönderilsin mi? Geri alınamaz.`))) return;
-    const state = await api(`/panel/api/shops/${shop.id}/broadcast`, json("POST", { text }));
+    const state = await api(`/panel/api/shops/${shop.id}/broadcast`, json("POST", { text, segment: $("bc-segment").value || "hepsi" }));
     $("bc-text").value = "";
     toast(`📣 ${fmtNum(state.queued)} kişiye gönderiliyor.`);
     renderBroadcast(state);
@@ -426,6 +433,8 @@
     $("f-support").value = s.support_text;
     $("f-terms").value = s.terms_text;
     $("f-referral").value = s.referral_percent ? String(s.referral_percent) : "";
+    $("f-cart").value = s.cart_discount ? String(s.cart_discount) : "";
+    $("f-webhook").value = s.sale_webhook || "";
     $("f-forward-wrap").hidden = s.mode !== "forward";
     $("f-forward-hint").textContent = s.forward_secret_set ? "(kayıtlı)" : "(kayıtlı değil)";
     $("f-forward-secret").value = "";
@@ -446,7 +455,7 @@
     foot.append(el("span", p.over_limit ? "badge off" : "badge",
       p.over_limit ? "Plan sınırı dışında, satılmıyor" : kindText + (p.file ? " · 📎" : "") + (p.channel_id ? " · 📣" : "") +
       (p.reviews ? ` · ★${p.rating} (${p.reviews})` : "") + (p.waiting ? ` · 🔔 ${p.waiting} bekliyor` : "") +
-      (p.group ? ` · ${p.group}: ${p.option}` : "") + (p.photo_uploaded ? " · 🖼" : "") + (p.upsell ? " · ✨ öneri" : "") + (p.includes ? " · 🧺 paket" : "") + (p.stock ? ` · stok ${p.stock}` : "") + (p.sale_until ? " · ⏰" : "")));
+      (p.flexible ? " · istediğin kadar" : "") + (p.ask ? " · ❓" : "") + (p.group ? ` · ${p.group}: ${p.option}` : "") + (p.photo_uploaded ? " · 🖼" : "") + (p.upsell ? " · ✨ öneri" : "") + (p.includes ? " · 🧺 paket" : "") + (p.stock ? ` · stok ${p.stock}` : "") + (p.sale_until ? " · ⏰" : "")));
     const actions = el("div", "actions");
     const edit = el("button", "btn small ghost", "Düzenle");
     edit.addEventListener("click", () => openProduct(p));
@@ -470,6 +479,7 @@
     const foot = el("div", "row");
     const details = [fmtDate(p.created), `alıcı ${p.user}`];
     if (p.expires) details.push(`bitiş ${fmtDate(p.expires)}`);
+    if (p.answer) details.push(`cevap: ${p.answer}`);
     foot.append(el("span", "meta", details.join(" · ")));
     if (p.refunded) {
       foot.append(el("span", "badge off", "İade edildi"));
@@ -511,7 +521,8 @@
 
   async function saveSettings() {
     const data = { shop_name: $("f-shop-name").value, support_text: $("f-support").value, terms_text: $("f-terms").value,
-      referral_percent: parseInt($("f-referral").value || "0", 10) || 0 };
+      referral_percent: parseInt($("f-referral").value || "0", 10) || 0,
+      cart_discount: parseInt($("f-cart").value || "0", 10) || 0, sale_webhook: $("f-webhook").value.trim() };
     if (shop.mode === "forward" && $("f-forward-secret").value.trim()) data.forward_secret = $("f-forward-secret").value.trim();
     shop = { ...shop, ...(await api(`/panel/api/shops/${shop.id}`, json("PATCH", data))) };
     toast("Kaydedildi.");
@@ -544,6 +555,8 @@
     $("p-photo-id").textContent = p ? p.id : "ürün-kimliği";
     $("p-photo-state").textContent = p && p.photo_uploaded ? "✓ Yüklenmiş bir fotoğraf var." : "";
     $("p-group").value = p && p.group ? p.group : "";
+    $("p-ask").value = p && p.ask ? p.ask : "";
+    $("p-flexible").checked = Boolean(p && p.flexible);
     $("p-option").value = p && p.option ? p.option : "";
     $("p-group").setAttribute("list", "p-groups");
     const groups = [...new Set(shop.products.map((x) => x.group).filter(Boolean))];
@@ -572,6 +585,7 @@
       const sub = $("p-kind").value === "subscription";
       $("p-days-wrap").hidden = sub;
       $("p-includes-wrap").hidden = sub;
+      $("p-flexible-wrap").hidden = sub;
     };
     $("p-kind").onchange = syncKind;
     syncKind();
@@ -596,6 +610,8 @@
       stock: $("p-stock").value.trim() || null,
       compare_at: $("p-compare").value.trim() || null,
       group: $("p-group").value.trim() || null,
+      ask: $("p-ask").value.trim() || null,
+      flexible: $("p-kind").value !== "subscription" && $("p-flexible").checked,
       option: $("p-group").value.trim() ? ($("p-option").value.trim() || null) : null,
       upsell: $("p-upsell").value || null,
       upsell_percent: $("p-upsell").value ? ($("p-upsell-percent").value.trim() || null) : null,
@@ -628,6 +644,7 @@
     $("refresh-customers").addEventListener("click", () => guarded($("refresh-customers"), loadCustomers));
     $("promo-add").addEventListener("click", () => guarded($("promo-add"), addPromo));
     $("bc-send").addEventListener("click", () => guarded($("bc-send"), sendBroadcast));
+    $("bc-segment").addEventListener("change", () => loadBroadcast().catch((e) => toast(e.message)));
     $("save-product").addEventListener("click", () => guarded($("save-product"), saveProduct));
     $("resync").addEventListener("click", () => guarded($("resync"), async () => {
       shop = { ...shop, ...(await api(`/panel/api/shops/${shop.id}/sync`, { method: "POST" })) };

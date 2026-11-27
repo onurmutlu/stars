@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS expiry_warnings(order_id TEXT PRIMARY KEY, sent REAL 
 CREATE TABLE IF NOT EXISTS broadcasts(
     id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL,
     confirmed REAL, finished REAL, total INTEGER NOT NULL DEFAULT 0, sent INTEGER NOT NULL DEFAULT 0,
-    failed INTEGER NOT NULL DEFAULT 0);
+    failed INTEGER NOT NULL DEFAULT 0, segment TEXT);
 CREATE TABLE IF NOT EXISTS broadcast_queue(
     broadcast INTEGER NOT NULL, user INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'queued',
     PRIMARY KEY(broadcast, user));
@@ -107,9 +107,11 @@ class Store:
         self.db.executescript(SCHEMA)
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(orders)")}
         for column, kind in (("channel", "INTEGER"), ("access_days", "INTEGER"), ("promo", "TEXT"),
-                             ("gift", "INTEGER NOT NULL DEFAULT 0")):
+                             ("gift", "INTEGER NOT NULL DEFAULT 0"), ("answer", "TEXT")):
             if column not in columns:  # databases from before these fields
                 self.db.execute(f"ALTER TABLE orders ADD COLUMN {column} {kind}")
+        if "segment" not in {row[1] for row in self.db.execute("PRAGMA table_info(broadcasts)")}:
+            self.db.execute("ALTER TABLE broadcasts ADD COLUMN segment TEXT")
         contact_columns = {row[1] for row in self.db.execute("PRAGMA table_info(contacts)")}
         for column in ("opted_out", "blocked"):
             if column not in contact_columns:
@@ -118,15 +120,15 @@ class Store:
 
     # orders -----------------------------------------------------------------
     def create_order(self, user: int, product, stars: int | None = None, promo: str | None = None,
-                     gift: bool = False) -> str:
+                     gift: bool = False, answer: str | None = None) -> str:
         order_id = uuid.uuid4().hex
         with self.db:
             self.db.execute(
-                "INSERT INTO orders(id,user,product,kind,title,stars,content,created,channel,access_days,promo,gift) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO orders(id,user,product,kind,title,stars,content,created,channel,access_days,promo,gift,answer) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (order_id, user, product.id, product.kind, product.title, stars if stars is not None else product.stars,
                  product.content, time.time(), getattr(product, "channel_id", None), getattr(product, "access_days", None),
-                 promo, int(gift)),
+                 promo, int(gift), answer),
             )
         return order_id
 
@@ -419,8 +421,28 @@ class Store:
         return self.db.execute("SELECT * FROM channels WHERE status='administrator' ORDER BY updated DESC").fetchall()
 
     # broadcasts ----------------------------------------------------------------------
-    def audience(self, exclude: frozenset[int] = frozenset()) -> list[int]:
-        rows = self.db.execute("SELECT user FROM contacts WHERE opted_out=0 AND blocked=0").fetchall()
+    def audience(self, exclude: frozenset[int] = frozenset(), segment: str | None = None) -> list[int]:
+        """Reachable contacts. segment: None/'hepsi' everyone, 'alicilar' people with a live paid order,
+        'ziyaretciler' people who never paid, 'sepet' unpaid orders and no purchase, 'urun:<id>' buyers of a product."""
+        live = "EXISTS (SELECT 1 FROM payments p WHERE p.user=c.user AND p.stars>0 " \
+               "AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.charge=p.charge){extra})"
+        where, args = "", []
+        if segment in (None, "", "hepsi"):
+            pass
+        elif segment == "alicilar":
+            where = " AND " + live.format(extra="")
+        elif segment == "ziyaretciler":
+            where = " AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.user=c.user)"
+        elif segment == "sepet":
+            where = (" AND EXISTS (SELECT 1 FROM orders o WHERE o.user=c.user AND o.paid=0)"
+                     " AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.user=c.user)")
+        elif segment.startswith("urun:"):
+            where = " AND EXISTS (SELECT 1 FROM payments p JOIN orders o ON o.id=p.order_id WHERE p.user=c.user " \
+                    "AND o.product=? AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.charge=p.charge))"
+            args.append(segment[5:])
+        else:
+            raise ValueError("bilinmeyen kitle")
+        rows = self.db.execute(f"SELECT user FROM contacts c WHERE opted_out=0 AND blocked=0{where}", args).fetchall()
         return [r["user"] for r in rows if r["user"] not in exclude]
 
     def set_opt_out(self, user: int, opted_out: bool) -> None:
@@ -437,11 +459,11 @@ class Store:
     def pending_broadcast(self):
         return self.db.execute("SELECT * FROM broadcasts WHERE status='pending' ORDER BY id DESC LIMIT 1").fetchone()
 
-    def create_broadcast(self, text: str) -> int:
+    def create_broadcast(self, text: str, segment: str | None = None) -> int:
         with self.db:
             self.db.execute("UPDATE broadcasts SET status='cancelled' WHERE status='pending'")
-            return self.db.execute("INSERT INTO broadcasts(text,status,created) VALUES(?,?,?)",
-                                   (text, "pending", time.time())).lastrowid
+            return self.db.execute("INSERT INTO broadcasts(text,status,created,segment) VALUES(?,?,?,?)",
+                                   (text, "pending", time.time(), segment)).lastrowid
 
     def cancel_broadcast(self) -> bool:
         with self.db:
@@ -591,7 +613,7 @@ class Store:
         """Every payment with its order and buyer, newest first (for the CSV report)."""
         rows = self.db.execute(
             "SELECT p.created, p.charge, p.stars, p.expires, p.recurring, o.id AS order_id, o.product, o.title, "
-            "o.kind, o.promo, o.user, c.name, c.username, c.source, "
+            "o.kind, o.promo, o.answer, o.user, c.name, c.username, c.source, "
             "EXISTS(SELECT 1 FROM refunds r WHERE r.charge=p.charge) AS refunded "
             "FROM payments p JOIN orders o ON o.id=p.order_id LEFT JOIN contacts c ON c.user=o.user "
             "ORDER BY p.created DESC LIMIT ?", (limit,)).fetchall()

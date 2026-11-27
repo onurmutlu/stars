@@ -82,3 +82,6 @@ p.muted.small { font-size: 12.5px; margin: -4px 0 4px; }
 .top li { padding-left: 2px; }
 .top li span { margin-right: 8px; }
 .top li b { float: right; font-weight: 600; }
+
+.check { display: flex; gap: 10px; align-items: flex-start; font-weight: 500; }
+.check input { width: 20px; height: 20px; margin-top: 2px; flex: none; }

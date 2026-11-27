@@ -358,7 +358,7 @@ class Hub:
         refunds = db.execute("SELECT COUNT(*) FROM refunds WHERE charge NOT LIKE '%:%'").fetchone()[0]
         buyers = db.execute(f"SELECT COUNT(DISTINCT user) FROM payments p WHERE {live}").fetchone()[0]
         recent = db.execute(
-            "SELECT p.charge, p.user, p.stars, p.created, p.expires, o.title, o.kind, "
+            "SELECT p.charge, p.user, p.stars, p.created, p.expires, o.title, o.kind, o.answer, "
             "EXISTS (SELECT 1 FROM refunds r WHERE r.charge=p.charge) AS refunded "
             "FROM payments p JOIN orders o ON o.id=p.order_id ORDER BY p.created DESC LIMIT 30").fetchall()
         issues = self.store_for(tenant["id"]).open_issues()
@@ -401,6 +401,8 @@ class ShopPatch(BaseModel):
     terms_text: str | None = Field(None, max_length=2048)
     sales_enabled: bool | None = None
     referral_percent: int | None = Field(None, ge=0, le=90)
+    cart_discount: int | None = Field(None, ge=0, le=90)
+    sale_webhook: str | None = Field(None, max_length=512)
     forward_secret: str | None = Field(None, max_length=256)
 
 
@@ -410,6 +412,7 @@ class HideRequest(BaseModel):
 
 class BroadcastRequest(BaseModel):
     text: str = Field(min_length=1, max_length=3500)
+    segment: str | None = Field(None, max_length=40)
 
 
 class PromoRequest(BaseModel):
@@ -548,7 +551,8 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         tenant = tenant_by_slug(slug)
         user = buyer(tenant, x_telegram_init_data)
         try:
-            return await hub.shop(tenant).create_invoice(user, body.product_id, body.code, body.gift)
+            return await hub.shop(tenant).create_invoice(user, body.product_id, body.code, body.gift,
+                                                        body.answer, body.amount)
         except TelegramError as exc:
             log.error("Kiracı %s fatura oluşturamadı: %s", tenant["id"], exc.description)
             raise HTTPException(502, "Fatura oluşturulamadı, biraz sonra tekrar dene.") from None
@@ -794,16 +798,17 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         return {"sent": True}
 
     @app.get("/panel/api/shops/{tenant_id}/broadcast")
-    async def panel_broadcast_state(tenant_id: str, x_telegram_init_data: str | None = Header(None)):
+    async def panel_broadcast_state(tenant_id: str, segment: str | None = None,
+                                    x_telegram_init_data: str | None = Header(None)):
         tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
-        return hub.shop(tenant).broadcast_state()
+        return hub.shop(tenant).broadcast_state(segment=segment)
 
     @app.post("/panel/api/shops/{tenant_id}/broadcast")
     async def panel_broadcast(tenant_id: str, body: BroadcastRequest, x_telegram_init_data: str | None = Header(None)):
         tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
         shop = hub.shop(tenant)
-        queued = shop.start_broadcast(body.text)
-        return {"queued": queued} | shop.broadcast_state()
+        queued = shop.start_broadcast(body.text, segment=body.segment)
+        return {"queued": queued} | shop.broadcast_state(segment=body.segment)
 
     @app.get("/panel/api/shops/{tenant_id}/promos")
     async def panel_promos(tenant_id: str, x_telegram_init_data: str | None = Header(None)):

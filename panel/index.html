@@ -124,6 +124,7 @@
         <h2>Duyuru</h2>
       </div>
       <article class="card form">
+        <label>Kimlere <select id="bc-segment"></select></label>
         <p class="muted" id="bc-info">Botunla konuşmuş herkese gider. Günde en fazla bir duyuru; alıcılar /durdur ile çıkabilir.</p>
         <textarea id="bc-text" rows="3" maxlength="3500" placeholder="Yeni deneme paketi çıktı! Bu hafta YAZ20 koduyla %20 indirim."></textarea>
         <button class="btn wide" id="bc-send">Duyuruyu gönder</button>
@@ -139,6 +140,10 @@
           <textarea id="f-terms" maxlength="2048" rows="3" placeholder="Dijital ürün, teslimat anında. İade talepleri 7 gün içinde /paysupport ile."></textarea></label>
         <label>Davet indirimi % <span class="muted">(0 = kapalı; arkadaşı ilk alışverişi yapan alıcıya tek kullanımlık kod)</span>
           <input id="f-referral" type="number" min="0" max="90" inputmode="numeric" placeholder="0"></label>
+        <label>Yarım sipariş indirimi % <span class="muted">(0 = kapalı; 1 saat sonra giden hatırlatmaya 24 saatlik tek kullanımlık kod eklenir)</span>
+          <input id="f-cart" type="number" min="0" max="90" inputmode="numeric" placeholder="0"></label>
+        <label>Satış webhook'u <span class="muted">(isteğe bağlı; her satışta bu https adrese JSON gider: Zapier, Make, Google Sheets)</span>
+          <input id="f-webhook" maxlength="512" placeholder="https://hooks.zapier.com/..." autocomplete="off" spellcheck="false"></label>
         <label id="f-forward-wrap" hidden>Yönlendirme gizli anahtarı <span class="muted" id="f-forward-hint"></span>
           <input id="f-forward-secret" autocomplete="off" spellcheck="false" placeholder="değiştirmek için yaz"></label>
         <button class="btn wide" id="save-settings">Kaydet</button>
@@ -175,6 +180,10 @@
             </select>
           </label>
         </div>
+        <label class="check" id="p-flexible-wrap"><input id="p-flexible" type="checkbox">
+          <span>İstediğin kadar öde <span class="muted">(fiyat en az tutar olur; alıcı daha fazlasını seçebilir: bağış, destek, bahşiş)</span></span></label>
+        <label>Alıcıya sorulacak soru <span class="muted">(isteğe bağlı; ör. "E-posta adresin?", "Hangi gün uygunsun?")</span>
+          <input id="p-ask" maxlength="80" placeholder="cevap ödeme öncesi istenir, sana bildirimle gelir"></label>
         <label>Teslim içeriği <span class="muted">(ödemeden sonra gösterilir: metin, link, davet linki)</span>
           <textarea id="p-content" maxlength="4096" rows="4" placeholder="Kulübe katıl: https://t.me/+DAVET"></textarea></label>
         <div class="two">

@@ -250,6 +250,24 @@ def test_panel_sales_chart_and_option_groups(hub_client):
     assert hub_client.get(f"/s/{shop['username']}/api/photo/k7").status_code == 404
 
 
+def test_cart_discount_webhook_and_segmented_broadcast_in_panel(hub_client):
+    shop = ready_shop(hub_client)
+    url = f"/panel/api/shops/{shop['id']}"
+    assert hub_client.patch(url, json={"sale_webhook": "http://x"}, headers=panel()).status_code == 400
+    body = hub_client.patch(url, json={"cart_discount": 15, "sale_webhook": "https://hook.example.com/a"}, headers=panel()).json()
+    assert body["cart_discount"] == 15 and body["sale_webhook"] == "https://hook.example.com/a"
+    settings = hub_client.hub.registry.shop_settings(hub_client.hub.registry.tenant(shop["id"]))
+    assert settings.cart_discount == 15 and settings.sale_webhook == "https://hook.example.com/a"
+    store = hub_client.hub.store_for(shop["id"])
+    store.touch_contact({"id": BUYER})
+    state = hub_client.get(f"{url}/broadcast", params={"segment": "alicilar"}, headers=panel()).json()
+    assert state["audience"] == 0 and state["segment"] == "alicilar" and any(s["id"] == "urun:guide" for s in state["segments"])
+    assert hub_client.get(f"{url}/broadcast", params={"segment": "ziyaretciler"}, headers=panel()).json()["audience"] == 1
+    assert hub_client.post(f"{url}/broadcast", json={"text": "x", "segment": "alicilar"}, headers=panel()).status_code == 400
+    assert hub_client.post(f"{url}/broadcast", json={"text": "Merhaba", "segment": "ziyaretciler"},
+                           headers=panel()).json()["queued"] == 1
+
+
 def test_owner_isolation_in_panel(hub_client):
     shop = ready_shop(hub_client)
     url = f"/panel/api/shops/{shop['id']}"
