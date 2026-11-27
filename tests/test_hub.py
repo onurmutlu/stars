@@ -491,3 +491,15 @@ def test_panel_crm_lists_shop_contacts_and_messages_them(hub_client, world):
     assert hub_client.post(f"{url}/12345/message", headers=panel(), json={"text": "x"}).status_code == 404
     assert hub_client.put(f"{url}/{BUYER}/note", headers=panel(), json={"note": "pazartesi ara"}).status_code == 200
     assert hub_client.get(url, headers=panel()).json()["customers"][0]["note"] == "pazartesi ara"
+
+
+def test_panel_promo_codes_per_shop(hub_client, world):
+    shop = ready_shop(hub_client)
+    url = f"/panel/api/shops/{shop['id']}/promos"
+    r = hub_client.post(url, headers=panel(), json={"code": "ilk10", "percent": 10, "days": 7})
+    assert r.status_code == 200 and r.json()["promos"][0]["code"] == "ILK10"
+    assert hub_client.post(url, headers=panel(), json={"code": "x y", "percent": 10}).status_code == 400
+    assert hub_client.get(url, headers=panel(SELLER2)).status_code == 404
+    quote = hub_client.get(f"/s/{shop['username']}/api/quote", params={"product_id": "guide", "code": "ILK10"}).json()
+    assert quote["stars"] == 45 and quote["original"] == 50
+    assert hub_client.delete(f"{url}/ILK10", headers=panel()).json()["promos"][0]["active"] == 0

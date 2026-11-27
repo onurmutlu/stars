@@ -32,6 +32,7 @@ def _mtime(path) -> float | None:
 
 class OrderRequest(BaseModel):
     product_id: str = Field(min_length=1, max_length=32)
+    code: str | None = Field(None, max_length=24)
 
 
 def create_app(settings: Settings | None = None, products: dict[str, Product] | None = None,
@@ -125,12 +126,17 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
         refresh_products()
         return shop.catalog()
 
+    @app.get("/api/quote")
+    async def quote(product_id: str, code: str | None = None):
+        refresh_products()
+        return shop.quote(product_id, code)
+
     @app.post("/api/orders")
     async def create_order(body: OrderRequest, x_telegram_init_data: str | None = Header(None)):
         user = user_id(x_telegram_init_data)
         refresh_products()
         try:
-            return await shop.create_invoice(user, body.product_id)
+            return await shop.create_invoice(user, body.product_id, body.code)
         except TelegramError as exc:
             log.error("Fatura oluşturulamadı: %s", exc.description)
             raise HTTPException(502, "Fatura oluşturulamadı, biraz sonra tekrar dene.") from None

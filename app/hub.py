@@ -65,7 +65,7 @@ HUB_COMMANDS = [
 # In forward mode these commands stay with the shop; everything else goes to the bot's own backend.
 FORWARD_MODE_SHOP_COMMANDS = {"/magaza", "/shop", "/orders", "/paysupport", "/terms"}
 # owner commands a forwarded bot still sends to the shop
-OWNER_SHOP_COMMANDS = {"/issues", "/dosya", "/musteriler", "/admin", "/yonetim"}
+OWNER_SHOP_COMMANDS = {"/issues", "/dosya", "/musteriler", "/admin", "/yonetim", "/kod"}
 PRO_ID = "pro"
 
 ApiFactory = Callable[[str], Callable[..., Awaitable]]
@@ -384,6 +384,7 @@ class Hub:
 # ---------------------------------------------------------------------- HTTP layer
 class OrderRequest(BaseModel):
     product_id: str = Field(min_length=1, max_length=32)
+    code: str | None = Field(None, max_length=24)
 
 
 class ConnectRequest(BaseModel):
@@ -398,6 +399,14 @@ class ShopPatch(BaseModel):
     terms_text: str | None = Field(None, max_length=2048)
     sales_enabled: bool | None = None
     forward_secret: str | None = Field(None, max_length=256)
+
+
+class PromoRequest(BaseModel):
+    code: str = Field(min_length=3, max_length=24)
+    percent: int = Field(ge=1, le=90)
+    days: int | None = Field(None, ge=1, le=365)
+    max_uses: int | None = Field(None, ge=1, le=100000)
+    product: str | None = Field(None, max_length=32)
 
 
 class CustomerMessage(BaseModel):
@@ -519,12 +528,16 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
     async def shop_products(slug: str):
         return hub.shop(tenant_by_slug(slug)).catalog()
 
+    @app.get("/s/{slug}/api/quote")
+    async def shop_quote(slug: str, product_id: str, code: str | None = None):
+        return hub.shop(tenant_by_slug(slug)).quote(product_id, code)
+
     @app.post("/s/{slug}/api/orders")
     async def shop_order(slug: str, body: OrderRequest, x_telegram_init_data: str | None = Header(None)):
         tenant = tenant_by_slug(slug)
         user = buyer(tenant, x_telegram_init_data)
         try:
-            return await hub.shop(tenant).create_invoice(user, body.product_id)
+            return await hub.shop(tenant).create_invoice(user, body.product_id, body.code)
         except TelegramError as exc:
             log.error("Kiracı %s fatura oluşturamadı: %s", tenant["id"], exc.description)
             raise HTTPException(502, "Fatura oluşturulamadı, biraz sonra tekrar dene.") from None
@@ -698,6 +711,32 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         if not hub.store_for(tenant["id"]).set_note(user, body.note.strip()):
             raise ShopError("Müşteri bulunamadı.", 404)
         return {"ok": True}
+
+    @app.get("/panel/api/shops/{tenant_id}/promos")
+    async def panel_promos(tenant_id: str, x_telegram_init_data: str | None = Header(None)):
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        return {"promos": hub.store_for(tenant["id"]).promos(), "bot": tenant["username"]}
+
+    @app.post("/panel/api/shops/{tenant_id}/promos")
+    async def panel_add_promo(tenant_id: str, body: PromoRequest, x_telegram_init_data: str | None = Header(None)):
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        args = [body.code, str(body.percent)]
+        if body.days:
+            args.append(f"{body.days}g")
+        if body.max_uses:
+            args.append(f"{body.max_uses}x")
+        if body.product:
+            args.append(body.product)
+        reply = hub.shop(tenant)._promo_command(" ".join(args))
+        if not reply.startswith("✅"):
+            raise ShopError(reply)
+        return {"promos": hub.store_for(tenant["id"]).promos(), "bot": tenant["username"]}
+
+    @app.delete("/panel/api/shops/{tenant_id}/promos/{code}")
+    async def panel_delete_promo(tenant_id: str, code: str, x_telegram_init_data: str | None = Header(None)):
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        hub.store_for(tenant["id"]).deactivate_promo(code)
+        return {"promos": hub.store_for(tenant["id"]).promos(), "bot": tenant["username"]}
 
     @app.delete("/panel/api/shops/{tenant_id}/products/{product_id}")
     async def panel_archive_product(tenant_id: str, product_id: str, x_telegram_init_data: str | None = Header(None)):

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 import time
 from typing import Awaitable, Callable
 
@@ -69,7 +70,28 @@ class StarsShop:
         files = self.store.product_files()
         return [p.public() | {"file": files.get(p.id, {}).get("kind")} for p in self.products.values()]
 
-    async def create_invoice(self, user: int, product_id: str) -> dict:
+    def quote(self, product_id: str, code: str | None) -> dict:
+        """Price of a product with an optional discount code; raises ShopError for a code that does not apply."""
+        product = self.products.get(product_id)
+        if not product:
+            raise ShopError("Ürün bulunamadı.", 404)
+        if not code or not code.strip():
+            return {"product": product.id, "stars": product.stars, "original": product.stars, "percent": 0, "code": None}
+        promo = self.store.promo(code)
+        now = time.time()
+        if not promo or not promo["active"] or (promo["expires"] and promo["expires"] < now):
+            raise ShopError("Bu kod geçerli değil ya da süresi dolmuş.")
+        if promo["max_uses"] is not None and promo["uses"] >= promo["max_uses"]:
+            raise ShopError("Bu kodun kullanım hakkı bitti.")
+        if promo["product"] and promo["product"] != product.id:
+            raise ShopError("Bu kod bu ürün için geçerli değil.")
+        if product.kind == "subscription":
+            raise ShopError("İndirim kodu aboneliklerde kullanılamıyor.")
+        stars = max(1, -(-product.stars * (100 - promo["percent"]) // 100))  # round up, never below 1 Star
+        return {"product": product.id, "stars": stars, "original": product.stars, "percent": promo["percent"],
+                "code": promo["code"]}
+
+    async def create_invoice(self, user: int, product_id: str, code: str | None = None) -> dict:
         if not self.settings.sales_enabled:
             raise ShopError("Satış şu an kapalı.", 403)
         product = self.products.get(product_id)
@@ -77,7 +99,8 @@ class StarsShop:
             raise ShopError("Ürün bulunamadı.", 404)
         if self._owns(user, product.id):
             raise ShopError("Bu ürün zaten sende. 'Satın aldıklarım' bölümünden açabilirsin.", 409)
-        order_id = self.store.create_order(user, product)
+        price = self.quote(product.id, code)
+        order_id = self.store.create_order(user, product, stars=price["stars"], promo=price["code"])
         extra = {"subscription_period": SUBSCRIPTION_PERIOD} if product.kind == "subscription" else {}
         if product.photo_url:
             extra["photo_url"] = product.photo_url
@@ -87,7 +110,8 @@ class StarsShop:
             description=product.description,
             payload=order_id,
             currency="XTR",
-            prices=[{"label": product.title, "amount": product.stars}],
+            prices=[{"label": product.title + (f" ({price['code']} -%{price['percent']})" if price["code"] else ""),
+                     "amount": price["stars"]}],
             **extra,
         )
         return {"order_id": order_id, "invoice_link": link}
@@ -333,6 +357,50 @@ class StarsShop:
         elif text:
             await self._command(sender["id"], text)
 
+    def _promo_command(self, argument: str) -> str:
+        """/kod · /kod YAZ20 20 [7g] [50x] [ürün] · /kod YAZ20 sil"""
+        parts = argument.split()
+        if not parts:
+            rows = self.store.promos()
+            if not rows:
+                return ("Kod yok. Oluşturmak için: /kod YAZ20 20  (yüzde 20)\n"
+                        "İsteğe bağlı: 7g (7 gün geçerli), 50x (50 kullanım), ürün kimliği.")
+            lines = ["🎁 İndirim kodları"]
+            for r in rows[:20]:
+                state = "aktif" if r["active"] and not (r["expires"] and r["expires"] < time.time()) else "kapalı"
+                limit = f"{r['uses']}/{r['max_uses']}" if r["max_uses"] is not None else f"{r['uses']} kullanım"
+                lines.append(f"• {r['code']} %{r['percent']} · {limit} · {state}" + (f" · {r['product']}" if r["product"] else ""))
+            return "\n".join(lines)
+        code = parts[0].upper()
+        if not re.fullmatch(r"[A-Z0-9_-]{3,24}", code):
+            return "Kod 3–24 karakter olmalı: harf, rakam, - ve _."
+        if len(parts) > 1 and parts[1].lower() in ("sil", "kapat", "iptal"):
+            return f"{code} kapatıldı." if self.store.deactivate_promo(code) else f"{code} bulunamadı ya da zaten kapalı."
+        if len(parts) < 2 or not parts[1].rstrip("%").isdigit() or not 1 <= int(parts[1].rstrip("%")) <= 90:
+            return "Kullanım: /kod YAZ20 20 [7g] [50x] [ürün] — indirim %1–90."
+        percent = int(parts[1].rstrip("%"))
+        days = uses = product = None
+        for token in parts[2:]:
+            low = token.lower()
+            if low[:-1].isdigit() and low.endswith("g"):
+                days = int(low[:-1])
+            elif low[:-1].isdigit() and low.endswith("x"):
+                uses = int(low[:-1])
+            elif low in self.products:
+                product = low
+            else:
+                return f"'{token}' anlaşılmadı. Gün için 7g, kullanım için 50x, ürün için kimliğini yaz."
+        self.store.save_promo(code, percent, product, uses, time.time() + days * 86400 if days else None)
+        details = [f"%{percent} indirim"]
+        if product:
+            details.append(f"sadece {self.products[product].title}")
+        if days:
+            details.append(f"{days} gün geçerli")
+        if uses:
+            details.append(f"{uses} kullanım")
+        link = f"\nKampanya linki: https://t.me/{self.settings.bot_username}?start=kod_{code}" if self.settings.bot_username else ""
+        return f"✅ {code}: " + ", ".join(details) + "." + link + "\nAlıcı mağazada kodu yazar ya da linke tıklar."
+
     async def _attach(self, admin: int, text: str, message: dict) -> None:
         """/dosya <ürün> as the caption of a file attaches it; /dosya <ürün> sil removes it."""
         parts = text.split()
@@ -491,6 +559,8 @@ class StarsShop:
             expires = int(time.time()) + int(order["access_days"]) * 86400
         renewal = bool(self.store.live_payments(order["id"]))
         self.store.add_payment(charge, order, expires, bool(payment.get("is_recurring")))
+        if order["promo"] and not renewal:
+            self.store.count_promo_use(order["promo"])
         if order["channel"]:
             self.store.reopen_channel(order["id"])
         await self.try_deliver(self.store.order(order["id"]))
@@ -527,6 +597,25 @@ class StarsShop:
             rows = self.store.open_issues()
             reply = "\n".join(f"{r['reason']} · user={r['user']} · {r['stars']}⭐ · {r['charge']}" for r in rows[:30]) \
                 or "Açık ödeme sorunu yok."
+        elif command in ("/kod", "/code") and user in self.settings.admin_ids:
+            reply = self._promo_command(argument)
+        elif command == "/start" and argument.lower().startswith("kod_"):
+            code = argument[4:]
+            try:
+                any_product = next(iter(self.products))
+                promo = self.store.promo(code)
+                if not promo or not promo["active"]:
+                    raise ShopError("kod yok")
+                self.quote(promo["product"] or any_product, code)
+            except (ShopError, StopIteration):
+                reply = "Bu kampanya kodu artık geçerli değil. Mağazadaki güncel ürünlere göz atabilirsin."
+            else:
+                target = f"/app?code={promo['code']}" + (f"&p={promo['product']}" if promo["product"] else "")
+                await self.api("sendMessage", chat_id=user,
+                               text=f"🎁 {promo['code']} koduyla %{promo['percent']} indirim! Ürünü seçince kod otomatik uygulanır.",
+                               reply_markup={"inline_keyboard": [[{"text": "🛍 İndirimle al",
+                                                                   "web_app": {"url": self.settings.webapp_url + target}}]]})
+                return
         elif command in ("/musteriler", "/customers") and user in self.settings.admin_ids:
             funnel = self.store.funnel()
             recent = self.store.customers(limit=10)

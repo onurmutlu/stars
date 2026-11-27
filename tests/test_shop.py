@@ -541,3 +541,51 @@ def test_timed_product_without_channel_tells_buyer_when_it_ends(api, store):
         assert asyncio.run(shop.notify_expired(time.time() + 8 * 86400)) == 1
         assert "doldu" in api.of("sendMessage")[-1]["text"]
         assert asyncio.run(shop.notify_expired(time.time() + 9 * 86400)) == 0
+
+
+# ------------------------------------------------------------------ promo codes
+def test_promo_code_lowers_price_counts_use_and_respects_limits(client, api, store):
+    hook(client, text("/kod YAZ20 20 2x", user_id=ADMIN))
+    assert api.of("sendMessage")[-1]["text"].startswith("✅ YAZ20")
+    assert client.get("/api/quote", params={"product_id": "guide", "code": "yaz20"}).json()["stars"] == 40
+    r = client.post("/api/orders", json={"product_id": "guide", "code": "YAZ20"}, headers=headers())
+    order_id = r.json()["order_id"]
+    invoice = api.of("createInvoiceLink")[-1]
+    assert invoice["prices"][0]["amount"] == 40 and "YAZ20" in invoice["prices"][0]["label"]
+    hook(client, pre_checkout(order_id, amount=40))
+    assert api.of("answerPreCheckoutQuery")[-1]["ok"] is True
+    hook(client, paid(order_id, amount=40, update_id=40))
+    assert store.promo("YAZ20")["uses"] == 1
+    # subscriptions, unknown codes and closed codes are refused with a reason
+    assert client.post("/api/orders", json={"product_id": "club", "code": "YAZ20"}, headers=headers(OTHER)).status_code == 400
+    assert "geçerli değil" in client.get("/api/quote", params={"product_id": "guide", "code": "NOPE"}).json()["detail"]
+    hook(client, text("/kod YAZ20 sil", user_id=ADMIN, update_id=41))
+    assert client.get("/api/quote", params={"product_id": "guide", "code": "YAZ20"}).status_code == 400
+
+
+def test_promo_rules_round_up_expire_and_limit_to_a_product(client, api, store):
+    store.save_promo("DOKSAN", 90, product="guide", max_uses=1)
+    assert client.get("/api/quote", params={"product_id": "guide", "code": "doksan"}).json()["stars"] == 5
+    store.save_promo("ESKI", 10, expires=time.time() - 1)
+    assert client.get("/api/quote", params={"product_id": "guide", "code": "ESKI"}).status_code == 400
+    store.save_promo("TEKURUN", 10, product="club")
+    assert "bu ürün" in client.get("/api/quote", params={"product_id": "guide", "code": "TEKURUN"}).json()["detail"]
+    store.save_promo("BIRKEZ", 10, max_uses=1)
+    store.count_promo_use("BIRKEZ")
+    assert "hakkı bitti" in client.get("/api/quote", params={"product_id": "guide", "code": "BIRKEZ"}).json()["detail"]
+
+
+def test_campaign_link_opens_the_shop_with_the_code(client, api, store):
+    store.save_promo("KAMPANYA", 15, product="guide")
+    hook(client, text("/start kod_KAMPANYA"))
+    message = api.of("sendMessage")[-1]
+    assert "%15" in message["text"]
+    assert message["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"] == \
+        "https://shop.example.com/app?code=KAMPANYA&p=guide"
+    hook(client, text("/start kod_YOK", update_id=12))
+    assert "geçerli değil" in api.of("sendMessage")[-1]["text"]
+
+
+def test_only_admins_manage_codes(client, api, store):
+    hook(client, text("/kod HACK 90"))
+    assert store.promo("HACK") is None

@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS inbox(
     PRIMARY KEY(admin, admin_message));
 CREATE TABLE IF NOT EXISTS cart_reminders(order_id TEXT PRIMARY KEY, sent REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS expiry_notices(order_id TEXT PRIMARY KEY, sent REAL NOT NULL);
+-- discount codes; uses count paid orders only
+CREATE TABLE IF NOT EXISTS promo_codes(
+    code TEXT PRIMARY KEY, percent INTEGER NOT NULL, product TEXT, max_uses INTEGER, uses INTEGER NOT NULL DEFAULT 0,
+    expires REAL, active INTEGER NOT NULL DEFAULT 1, created REAL NOT NULL);
 -- a file the bot sends after payment (Telegram file_id of THIS bot; the seller sends it with /dosya <product>)
 CREATE TABLE IF NOT EXISTS product_files(
     product TEXT PRIMARY KEY, file_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT, added REAL NOT NULL);
@@ -74,20 +78,21 @@ class Store:
             self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(orders)")}
-        for column in ("channel", "access_days"):  # databases from before these fields
-            if column not in columns:
-                self.db.execute(f"ALTER TABLE orders ADD COLUMN {column} INTEGER")
+        for column, kind in (("channel", "INTEGER"), ("access_days", "INTEGER"), ("promo", "TEXT")):
+            if column not in columns:  # databases from before these fields
+                self.db.execute(f"ALTER TABLE orders ADD COLUMN {column} {kind}")
         self.db.commit()
 
     # orders -----------------------------------------------------------------
-    def create_order(self, user: int, product, stars: int | None = None) -> str:
+    def create_order(self, user: int, product, stars: int | None = None, promo: str | None = None) -> str:
         order_id = uuid.uuid4().hex
         with self.db:
             self.db.execute(
-                "INSERT INTO orders(id,user,product,kind,title,stars,content,created,channel,access_days) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO orders(id,user,product,kind,title,stars,content,created,channel,access_days,promo) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (order_id, user, product.id, product.kind, product.title, stars if stars is not None else product.stars,
-                 product.content, time.time(), getattr(product, "channel_id", None), getattr(product, "access_days", None)),
+                 product.content, time.time(), getattr(product, "channel_id", None), getattr(product, "access_days", None),
+                 promo),
             )
         return order_id
 
@@ -196,6 +201,31 @@ class Store:
 
     def channels(self):
         return self.db.execute("SELECT * FROM channels WHERE status='administrator' ORDER BY updated DESC").fetchall()
+
+    # promo codes ---------------------------------------------------------------------
+    def save_promo(self, code: str, percent: int, product: str | None = None, max_uses: int | None = None,
+                   expires: float | None = None) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT INTO promo_codes(code,percent,product,max_uses,expires,created) VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(code) DO UPDATE SET percent=excluded.percent, product=excluded.product, "
+                "max_uses=excluded.max_uses, expires=excluded.expires, active=1",
+                (code.upper(), percent, product, max_uses, expires, time.time()))
+
+    def promo(self, code: str):
+        return self.db.execute("SELECT * FROM promo_codes WHERE code=?", (code.strip().upper(),)).fetchone()
+
+    def promos(self) -> list[dict]:
+        return [dict(r) for r in self.db.execute("SELECT * FROM promo_codes ORDER BY active DESC, created DESC")]
+
+    def deactivate_promo(self, code: str) -> bool:
+        with self.db:
+            return self.db.execute("UPDATE promo_codes SET active=0 WHERE code=? AND active=1",
+                                   (code.strip().upper(),)).rowcount > 0
+
+    def count_promo_use(self, code: str) -> None:
+        with self.db:
+            self.db.execute("UPDATE promo_codes SET uses=uses+1 WHERE code=?", (code,))
 
     # product files -------------------------------------------------------------------
     def set_product_file(self, product: str, file_id: str, kind: str, name: str | None) -> None:
