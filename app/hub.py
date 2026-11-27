@@ -65,7 +65,7 @@ HUB_COMMANDS = [
 # In forward mode these commands stay with the shop; everything else goes to the bot's own backend.
 FORWARD_MODE_SHOP_COMMANDS = {"/magaza", "/shop", "/orders", "/paysupport", "/terms", "/durdur", "/baslat", "/davet"}
 # owner commands a forwarded bot still sends to the shop
-OWNER_SHOP_COMMANDS = {"/issues", "/dosya", "/musteriler", "/admin", "/yonetim", "/kod", "/duyuru", "/duyuru_onay",
+OWNER_SHOP_COMMANDS = {"/rapor", "/issues", "/dosya", "/musteriler", "/admin", "/yonetim", "/kod", "/duyuru", "/duyuru_onay",
                        "/duyuru_iptal"}
 PRO_ID = "pro"
 
@@ -719,6 +719,16 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         if not hub.store_for(tenant["id"]).set_note(user, body.note.strip()):
             raise ShopError("Müşteri bulunamadı.", 404)
         return {"ok": True}
+
+    @app.post("/panel/api/shops/{tenant_id}/report")
+    async def panel_report(tenant_id: str, x_telegram_init_data: str | None = Header(None)):
+        """The shop's own bot sends the CSV files to the owner (the owner has opened that bot before)."""
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        try:
+            await hub.shop(tenant).send_reports(tenant["owner"])
+        except TelegramError as exc:
+            raise ShopError(f"Rapor gönderilemedi; önce @{tenant['username']} botunu açıp /start yaz. ({exc.description})")
+        return {"sent": True}
 
     @app.get("/panel/api/shops/{tenant_id}/broadcast")
     async def panel_broadcast_state(tenant_id: str, x_telegram_init_data: str | None = Header(None)):

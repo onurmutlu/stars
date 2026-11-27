@@ -423,6 +423,16 @@ class Store:
                            "note": r["note"], "first_seen": r["first_seen"], "last_seen": r["last_seen"]})
         return result
 
+    def sales_rows(self, limit: int = 20000) -> list[dict]:
+        """Every payment with its order and buyer, newest first (for the CSV report)."""
+        rows = self.db.execute(
+            "SELECT p.created, p.charge, p.stars, p.expires, p.recurring, o.id AS order_id, o.product, o.title, "
+            "o.kind, o.promo, o.user, c.name, c.username, c.source, "
+            "EXISTS(SELECT 1 FROM refunds r WHERE r.charge=p.charge) AS refunded "
+            "FROM payments p JOIN orders o ON o.id=p.order_id LEFT JOIN contacts c ON c.user=o.user "
+            "ORDER BY p.created DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
     def funnel(self, now: float | None = None) -> dict[str, int]:
         counts = {"ziyaretçi": 0, "sepette": 0, "müşteri": 0, "abone": 0, "iade": 0}
         for c in self.customers(limit=100000, now=now):

@@ -784,3 +784,20 @@ def test_referral_is_off_by_default_and_self_referral_does_nothing(client, api, 
     order_id = order(client)
     hook(client, paid(order_id, update_id=71))
     assert store.referral_stats(BUYER)["rewarded"] == 0
+
+
+# ------------------------------------------------------------------ csv report
+def test_report_command_sends_two_csv_files_to_admins_only(client, api, store):
+    order_id = order(client)
+    hook(client, paid(order_id, update_id=80))
+    hook(client, text("/rapor", update_id=81))
+    assert not api.of("sendDocument")
+    hook(client, text("/rapor", user_id=ADMIN, update_id=82))
+    docs = api.of("sendDocument")
+    assert [d["chat_id"] for d in docs] == [ADMIN, ADMIN]
+    name, body = docs[0]["files"]["document"]
+    assert name.endswith("satislar.csv") and body.startswith("﻿".encode())
+    lines = body.decode("utf-8-sig").splitlines()
+    assert lines[0].startswith("tarih;ürün") and ";guide;" in lines[1] and "ödendi" in lines[1]
+    customers = docs[1]["files"]["document"][1].decode("utf-8-sig").splitlines()
+    assert any(line.startswith(f"{BUYER};") and "müşteri" in line for line in customers)

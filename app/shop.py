@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import csv
+import io
 import logging
 import re
 import secrets
@@ -721,6 +723,37 @@ class StarsShop:
             until = f"\nBitiş: {time.strftime('%d.%m.%Y', time.localtime(expires))}" if expires else ""
             await self.notify_admins(f"{kind}: {order['title']} · ⭐{order['stars']}\nAlıcı: {_who(sender or {'id': user})}{until}")
 
+    def reports(self) -> dict[str, bytes]:
+        """satislar.csv and musteriler.csv, UTF-8 with BOM and ';' so Excel opens Turkish text correctly."""
+        day = lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) if t else ""  # noqa: E731
+
+        def table(header: list[str], rows) -> bytes:
+            out = io.StringIO()
+            writer = csv.writer(out, delimiter=";")
+            writer.writerow(header)
+            writer.writerows(rows)
+            return ("\ufeff" + out.getvalue()).encode("utf-8")
+
+        sales = table(
+            ["tarih", "ürün", "başlık", "tür", "yıldız", "kod", "durum", "bitiş", "kullanıcı", "ad", "kullanıcı_adı",
+             "kaynak", "sipariş", "ödeme"],
+            ([day(r["created"]), r["product"], r["title"], r["kind"], r["stars"], r["promo"] or "",
+              "iade" if r["refunded"] else ("paket" if r["stars"] == 0 else "ödendi"), day(r["expires"]),
+              r["user"], r["name"] or "", r["username"] or "", r["source"] or "", r["order_id"], r["charge"]]
+             for r in self.store.sales_rows()))
+        customers = table(
+            ["kullanıcı", "ad", "kullanıcı_adı", "aşama", "harcanan_yıldız", "ödeme", "kaynak", "not", "ilk", "son"],
+            ([c["user"], c["name"] or "", c["username"] or "", c["stage"], c["spent"], c["payments"],
+              c["source"] or "", c["note"] or "", day(c["first_seen"]), day(c["last_seen"])]
+             for c in self.store.customers(limit=100000)))
+        return {"satislar.csv": sales, "musteriler.csv": customers}
+
+    async def send_reports(self, chat_id: int) -> None:
+        stamp = time.strftime("%Y-%m-%d")
+        for name, body in self.reports().items():
+            await self.api("sendDocument", chat_id=chat_id, files={"document": (f"{stamp}-{name}", body)},
+                           caption=f"{self.settings.shop_name} · {name.removesuffix('.csv')}")
+
     def referral_link(self, user: int) -> str | None:
         if not self.settings.referral_percent or not self.settings.bot_username:
             return None
@@ -775,6 +808,12 @@ class StarsShop:
             rows = self.store.open_issues()
             reply = "\n".join(f"{r['reason']} · user={r['user']} · {r['stars']}⭐ · {r['charge']}" for r in rows[:30]) \
                 or "Açık ödeme sorunu yok."
+        elif command in ("/rapor", "/report") and user in self.settings.admin_ids:
+            try:
+                await self.send_reports(user)
+                return
+            except TelegramError as exc:
+                reply = f"Rapor gönderilemedi: {exc.description}"
         elif command in ("/davet", "/invite"):
             link = self.referral_link(user)
             if not link:
@@ -854,7 +893,7 @@ class StarsShop:
                 rows.append([{"text": "🔑 Lisans yönetimi", "url": self.settings.buy_url}])
             rows.append([{"text": "🛍 Mağazayı aç", "web_app": {"url": self.settings.webapp_url + "/app"}}])
             await self.api("sendMessage", chat_id=user,
-                           text="Yönetim\nMüşteriler: /musteriler · İade: /refund <charge_id> · Ödeme sorunları: /issues\n"
+                           text="Yönetim\nMüşteriler: /musteriler · İade: /refund <charge_id> · Ödeme sorunları: /issues · CSV rapor: /rapor\n"
                                 "Müşteri mesajları buraya gelir; cevaplamak için yanıtla.",
                            reply_markup={"inline_keyboard": rows})
             return

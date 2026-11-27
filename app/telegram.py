@@ -1,6 +1,7 @@
 """Minimal Bot API client. Never puts the token in logs or exception text."""
 from __future__ import annotations
 
+import json
 import logging
 
 import httpx
@@ -22,9 +23,15 @@ class BotAPI:
         self._url = f"{base_url}/bot{token}/"
         self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(40.0))
 
-    async def __call__(self, method: str, **payload):
+    async def __call__(self, method: str, files: dict[str, tuple[str, bytes]] | None = None, **payload):
+        """files={"document": ("satis.csv", b"...")} uploads as multipart; other fields go as form values."""
         try:
-            response = await self._client.post(self._url + method, json=payload)
+            if files:
+                form = {k: v if isinstance(v, str) else json.dumps(v) for k, v in payload.items() if v is not None}
+                response = await self._client.post(self._url + method, data=form,
+                                                   files={k: (name, body) for k, (name, body) in files.items()})
+            else:
+                response = await self._client.post(self._url + method, json=payload)
         except httpx.HTTPError as exc:
             # str(exc) may contain the URL, which contains the token.
             raise TelegramError(method, None, type(exc).__name__) from None
