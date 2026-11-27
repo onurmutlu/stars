@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import logging
 import re
+import secrets
 import time
 from typing import Awaitable, Callable
 
@@ -709,6 +710,8 @@ class StarsShop:
         if order["promo"] and not renewal:
             self.store.count_promo_use(order["promo"])
         await self._grant_bundle(user, order, charge)
+        if order["stars"] > 0 and self.store.paid_count(user) == 1:
+            await self._reward_referrer(user)
         if order["channel"]:
             self.store.reopen_channel(order["id"])
         await self.try_deliver(self.store.order(order["id"]))
@@ -717,6 +720,33 @@ class StarsShop:
                 else "💰 Yeni satış"
             until = f"\nBitiş: {time.strftime('%d.%m.%Y', time.localtime(expires))}" if expires else ""
             await self.notify_admins(f"{kind}: {order['title']} · ⭐{order['stars']}\nAlıcı: {_who(sender or {'id': user})}{until}")
+
+    def referral_link(self, user: int) -> str | None:
+        if not self.settings.referral_percent or not self.settings.bot_username:
+            return None
+        return f"https://t.me/{self.settings.bot_username}?start=ref_{user}"
+
+    async def _reward_referrer(self, buyer: int) -> None:
+        """A friend who came through ref_<id> made a first paid purchase: the referrer gets a one-use code."""
+        percent = self.settings.referral_percent
+        contact = self.store.contact(buyer)
+        source = (contact["source"] if contact else None) or ""
+        if not percent or not source.startswith("ref_") or not source[4:].isdigit():
+            return
+        referrer = int(source[4:])
+        if referrer == buyer or not self.store.contact(referrer):
+            return  # only people who already know the bot
+        code = "REF" + secrets.token_hex(3).upper()
+        if not self.store.add_referral_reward(buyer, referrer, code):
+            return
+        self.store.save_promo(code, percent, max_uses=1, expires=time.time() + 30 * 86400)
+        try:
+            await self.api("sendMessage", chat_id=referrer, text=(
+                f"🎁 Davet ettiğin bir arkadaşın ilk alışverişini yaptı, teşekkürler!\n"
+                f"Sana özel %{percent} indirim kodu: {code}\n30 gün geçerli, bir kez kullanılır. "
+                f"Mağazada ürün sayfasında 'İndirim kodu' alanına yaz."))
+        except TelegramError as exc:
+            log.warning("Davet ödülü gönderilemedi: user=%s %s", referrer, exc)
 
     async def _command(self, user: int, text: str) -> None:
         command, _, argument = text.strip().partition(" ")
@@ -745,6 +775,15 @@ class StarsShop:
             rows = self.store.open_issues()
             reply = "\n".join(f"{r['reason']} · user={r['user']} · {r['stars']}⭐ · {r['charge']}" for r in rows[:30]) \
                 or "Açık ödeme sorunu yok."
+        elif command in ("/davet", "/invite"):
+            link = self.referral_link(user)
+            if not link:
+                reply = "Davet programı bu mağazada kapalı."
+            else:
+                stats = self.store.referral_stats(user)
+                reply = (f"Arkadaşlarını davet et: biri ilk alışverişini yaptığında sana %{self.settings.referral_percent} "
+                         f"indirim kodu gelir.\nDavet linkin: {link}\n"
+                         f"Gelen: {stats['invited']} · Ödül: {stats['rewarded']}")
         elif command in ("/durdur", "/stop"):
             self.store.set_opt_out(user, True)
             reply = "Tamam, artık duyuru almayacaksın. Siparişlerin ve destek mesajların etkilenmez. Tekrar açmak için /baslat."

@@ -107,7 +107,8 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
         body = {"shop_name": settings.shop_name, "sales_enabled": settings.sales_enabled,
                 "support": settings.support_text, "terms": settings.terms_text,
                 "bot_username": settings.bot_username, "contact_url": settings.contact_url,
-                "checkout_urls": dict(settings.checkout_urls)}
+                "checkout_urls": dict(settings.checkout_urls),
+                "referral_percent": settings.referral_percent if settings.bot_username else 0}
         if settings.buy_url:
             body["buy"] = {"text": settings.buy_text or "Sen de Stars mağazası aç", "url": settings.buy_url}
         if settings.admin_url and x_telegram_init_data:

@@ -70,6 +70,9 @@ CREATE TABLE IF NOT EXISTS promo_codes(
 -- a file the bot sends after payment (Telegram file_id of THIS bot; the seller sends it with /dosya <product>)
 CREATE TABLE IF NOT EXISTS product_files(
     product TEXT PRIMARY KEY, file_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT, added REAL NOT NULL);
+-- one reward per referred buyer: the referrer gets a single-use code after the friend's first paid order
+CREATE TABLE IF NOT EXISTS referral_rewards(
+    referred INTEGER PRIMARY KEY, referrer INTEGER NOT NULL, code TEXT NOT NULL, created REAL NOT NULL);
 -- channels and groups the bot was made admin of (from my_chat_member updates)
 CREATE TABLE IF NOT EXISTS channels(
     id INTEGER PRIMARY KEY, title TEXT, type TEXT, status TEXT, can_invite INTEGER, can_restrict INTEGER, updated REAL);
@@ -367,6 +370,23 @@ class Store:
                 "name=COALESCE(excluded.name, contacts.name), username=COALESCE(excluded.username, contacts.username), "
                 "source=COALESCE(contacts.source, excluded.source)",
                 (int(user["id"]), name, username, now, now, (source or None) and source[:64]))
+
+    def contact(self, user: int):
+        return self.db.execute("SELECT * FROM contacts WHERE user=?", (user,)).fetchone()
+
+    def paid_count(self, user: int) -> int:
+        """Payments of real Stars by this user (bundle children with 0 Stars do not count)."""
+        return self.db.execute("SELECT COUNT(*) FROM payments WHERE user=? AND stars>0", (user,)).fetchone()[0]
+
+    def add_referral_reward(self, referred: int, referrer: int, code: str) -> bool:
+        with self.db:
+            return self.db.execute("INSERT OR IGNORE INTO referral_rewards VALUES(?,?,?,?)",
+                                   (referred, referrer, code, time.time())).rowcount > 0
+
+    def referral_stats(self, referrer: int) -> dict:
+        invited = self.db.execute("SELECT COUNT(*) FROM contacts WHERE source=?", (f"ref_{referrer}",)).fetchone()[0]
+        rewarded = self.db.execute("SELECT COUNT(*) FROM referral_rewards WHERE referrer=?", (referrer,)).fetchone()[0]
+        return {"invited": invited, "rewarded": rewarded}
 
     def set_note(self, user: int, note: str) -> bool:
         with self.db:

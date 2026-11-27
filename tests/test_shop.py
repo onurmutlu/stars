@@ -748,3 +748,39 @@ def test_sale_until_formats(tmp_path):
     for bad in ({"sale_until": "5 aralık"}, {"stock": 0}, {"stock": "çok"}):
         with pytest.raises(ConfigError):
             load(bad)
+
+
+# ------------------------------------------------------------------ referral
+def test_referral_rewards_the_inviter_once_after_the_friends_first_paid_order(api, store):
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    from tests.conftest import PRODUCTS, make_settings
+    client = TestClient(create_app(make_settings(referral_percent=15, bot_username="demo_bot"),
+                                   PRODUCTS, store, api, background=False))
+    hook(client, text("/start", user_id=OTHER, update_id=60))          # the inviter knows the bot
+    hook(client, text("/davet", user_id=OTHER, update_id=61))
+    assert f"start=ref_{OTHER}" in api.of("sendMessage")[-1]["text"]
+    hook(client, text(f"/start ref_{OTHER}", update_id=62))            # the friend arrives through the link
+    assert client.get("/api/config").json()["referral_percent"] == 15
+    order_id = client.post("/api/orders", json={"product_id": "guide"}, headers=headers()).json()["order_id"]
+    hook(client, paid(order_id, update_id=63))
+    reward = [m for m in api.of("sendMessage") if m["chat_id"] == OTHER][-1]["text"]
+    code = reward.split("kodu: ")[1].split()[0]
+    assert code.startswith("REF") and "%15" in reward
+    promo = store.promo(code)
+    assert promo["percent"] == 15 and promo["max_uses"] == 1
+    assert store.referral_stats(OTHER) == {"invited": 1, "rewarded": 1}
+    # a second purchase by the same friend gives nothing more
+    sent = len(api.of("sendMessage"))
+    order_id = client.post("/api/orders", json={"product_id": "club"}, headers=headers()).json()["order_id"]
+    hook(client, paid(order_id, charge="ch-2", update_id=64, subscription_expiration_date=int(time.time()) + 86400))
+    assert not [m for m in api.of("sendMessage")[sent:] if m["chat_id"] == OTHER]
+
+
+def test_referral_is_off_by_default_and_self_referral_does_nothing(client, api, store):
+    hook(client, text("/davet"))
+    assert "kapalı" in api.of("sendMessage")[-1]["text"]
+    hook(client, text(f"/start ref_{BUYER}", update_id=70))
+    order_id = order(client)
+    hook(client, paid(order_id, update_id=71))
+    assert store.referral_stats(BUYER)["rewarded"] == 0

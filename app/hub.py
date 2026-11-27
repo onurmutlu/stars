@@ -63,7 +63,7 @@ HUB_COMMANDS = [
     {"command": "terms", "description": "Koşullar"},
 ]
 # In forward mode these commands stay with the shop; everything else goes to the bot's own backend.
-FORWARD_MODE_SHOP_COMMANDS = {"/magaza", "/shop", "/orders", "/paysupport", "/terms", "/durdur", "/baslat"}
+FORWARD_MODE_SHOP_COMMANDS = {"/magaza", "/shop", "/orders", "/paysupport", "/terms", "/durdur", "/baslat", "/davet"}
 # owner commands a forwarded bot still sends to the shop
 OWNER_SHOP_COMMANDS = {"/issues", "/dosya", "/musteriler", "/admin", "/yonetim", "/kod", "/duyuru", "/duyuru_onay",
                        "/duyuru_iptal"}
@@ -399,6 +399,7 @@ class ShopPatch(BaseModel):
     support_text: str | None = Field(None, max_length=1024)
     terms_text: str | None = Field(None, max_length=2048)
     sales_enabled: bool | None = None
+    referral_percent: int | None = Field(None, ge=0, le=90)
     forward_secret: str | None = Field(None, max_length=256)
 
 
@@ -512,7 +513,7 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         shop_settings = registry.shop_settings(tenant)
         body = {"shop_name": shop_settings.shop_name, "sales_enabled": shop_settings.sales_enabled,
                 "support": shop_settings.support_text, "terms": shop_settings.terms_text,
-                "bot_username": tenant["username"]}
+                "bot_username": tenant["username"], "referral_percent": shop_settings.referral_percent}
         if hub.plan(tenant["owner"]).branding:
             link = f"https://t.me/{settings.bot_username}" if settings.bot_username else settings.base_url
             body["powered_by"] = {"text": f"{settings.name} ile yapıldı", "url": link}

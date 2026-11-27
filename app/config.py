@@ -221,6 +221,7 @@ class Settings:
     notify_sales: bool = True           # DM admins on every sale, renewal and refund
     summary_hour: int = 9               # local hour of the daily summary to admins; -1 turns it off
     cart_reminder: bool = True          # one reminder to a buyer who left an order unpaid for an hour
+    referral_percent: int = 0           # 1..90: a buyer whose friend makes a first purchase gets a code; 0 = off
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -248,6 +249,7 @@ class Settings:
             notify_sales=os.getenv("NOTIFY_SALES", "true").strip().lower() not in ("0", "false", "no", "off"),
             summary_hour=int(os.getenv("DAILY_SUMMARY_HOUR", "9")),
             cart_reminder=os.getenv("CART_REMINDER", "true").strip().lower() not in ("0", "false", "no", "off"),
+            referral_percent=max(0, min(90, int(os.getenv("REFERRAL_PERCENT", "0") or 0))),
             checkout_urls=tuple(
                 (plan, url.strip())
                 for plan, key in (

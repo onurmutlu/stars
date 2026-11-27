@@ -211,6 +211,16 @@ def test_sales_need_support_terms_and_a_product(hub_client):
     assert hub_client.patch(url, json={"sales_enabled": True}, headers=panel()).json()["sales_enabled"] is True
 
 
+def test_referral_percent_is_a_shop_setting(hub_client):
+    shop = ready_shop(hub_client)
+    url = f"/panel/api/shops/{shop['id']}"
+    assert hub_client.patch(url, json={"referral_percent": 95}, headers=panel()).status_code == 422
+    assert hub_client.patch(url, json={"referral_percent": 10}, headers=panel()).json()["referral_percent"] == 10
+    tenant = hub_client.hub.registry.tenant(shop["id"])
+    assert hub_client.hub.registry.shop_settings(tenant).referral_percent == 10
+    assert hub_client.get(f"/s/{tenant['username']}/api/config").json()["referral_percent"] == 10
+
+
 def test_owner_isolation_in_panel(hub_client):
     shop = ready_shop(hub_client)
     url = f"/panel/api/shops/{shop['id']}"

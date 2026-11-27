@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS tenants(
     forward_updates TEXT,             -- JSON list of the bot's previous allowed_updates
     last_sync REAL,
     last_sync_error TEXT,
+    referral_percent INTEGER NOT NULL DEFAULT 0,
     created REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS tenants_owner ON tenants(owner);
@@ -186,6 +187,8 @@ class Registry:
                              ("stock", "INTEGER"), ("sale_until", "REAL")):
             if column not in columns:  # databases created before these fields
                 self.db.execute(f"ALTER TABLE products ADD COLUMN {column} {kind}")
+        if "referral_percent" not in {row[1] for row in self.db.execute("PRAGMA table_info(tenants)")}:
+            self.db.execute("ALTER TABLE tenants ADD COLUMN referral_percent INTEGER NOT NULL DEFAULT 0")
         self.db.commit()
 
     # owners and plans ----------------------------------------------------------
@@ -269,6 +272,10 @@ class Registry:
                     raise ConfigError("Mağaza adı boş olamaz")
             elif key == "sales_enabled":
                 value = int(bool(value))
+            elif key == "referral_percent":
+                value = int(value or 0)
+                if not 0 <= value <= 90:
+                    raise ConfigError("Davet indirimi 0-90 arasında olmalı")
             elif key == "status":
                 if value not in STATUSES:
                     raise ConfigError("Geçersiz durum")
@@ -374,6 +381,7 @@ class Registry:
             bot_username=tenant["username"],
             admin_url=f"https://t.me/{self.hub.bot_username}?start=panel" if self.hub.bot_username else "",
             buy_url=f"https://t.me/{self.hub.bot_username}?start=lisans" if self.hub.bot_username else "",
+            referral_percent=tenant["referral_percent"],
         )
 
     def store_path(self, tenant_id: str) -> Path:
@@ -389,6 +397,7 @@ def public_tenant(tenant: sqlite3.Row, hub: HubSettings) -> dict:
         "id": tenant["id"], "username": tenant["username"], "shop_name": tenant["shop_name"],
         "support_text": tenant["support_text"], "terms_text": tenant["terms_text"],
         "sales_enabled": bool(tenant["sales_enabled"]), "status": tenant["status"],
+        "referral_percent": tenant["referral_percent"],
         "mode": "forward" if tenant["forward_url"] else "standalone",
         "forward_url": tenant["forward_url"], "forward_secret_set": bool(tenant["forward_secret"]),
         "shop_url": hub.shop_url(tenant["username"]),
