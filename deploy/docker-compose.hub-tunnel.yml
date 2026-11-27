@@ -1,0 +1,11 @@
+# Hub'ı Cloudflare Tunnel arkasında yayınla. Public Hostname: magaza.siyahkare.com -> http://hub:8000
+services:
+  hub:
+    ports: !reset []
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?TUNNEL_TOKEN ortamda olmalı}
+    depends_on: [hub]
+    restart: unless-stopped

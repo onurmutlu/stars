@@ -321,7 +321,10 @@
   (() => {
     "use strict";
     document.getElementById("year").textContent = String(new Date().getFullYear());
-    fetch("/api/config").then((r) => r.ok ? r.json() : null).then((cfg) => {
+    // On the shop server the config comes from /api/config; on static hosting (GitHub Pages) from site-config.json.
+    fetch("/api/config").then((r) => r.ok ? r.json() : Promise.reject())
+      .catch(() => fetch("site-config.json").then((r) => r.ok ? r.json() : null))
+      .then((cfg) => {
       if (!cfg) return;
       const bot = cfg.bot_username ? `https://t.me/${cfg.bot_username}` : "";
       const contact = cfg.contact_url || bot;

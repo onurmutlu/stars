@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Satıcı Paneli</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/panel/static/panel.css">
+</head>
+<body>
+  <header class="top">
+    <h1 id="title">Satıcı Paneli</h1>
+    <p class="muted sub" id="subtitle"></p>
+  </header>
+
+  <main>
+    <!-- home: plan + shops -->
+    <section id="view-home" class="view">
+      <article class="card plan" id="plan"></article>
+      <div class="section-head">
+        <h2>Mağazalarım</h2>
+        <button class="btn" id="go-connect">+ Mağaza bağla</button>
+      </div>
+      <div id="shops" class="list"></div>
+    </section>
+
+    <!-- connect a bot -->
+    <section id="view-connect" class="view" hidden>
+      <button class="link back" data-back>‹ Geri</button>
+      <article class="card">
+        <h3>Botuna mağaza bağla</h3>
+        <ol class="steps">
+          <li>@BotFather'da <b>/newbot</b> ile bot aç ya da mevcut botunu seç.</li>
+          <li>Bot token'ını aşağıya yapıştır.</li>
+          <li>Ürünlerini ekle, destek ve koşul metnini yaz, satışı aç.</li>
+        </ol>
+        <p class="muted">Stars doğrudan senin botunun bakiyesine yatar; Fragment'ten sen çekersin. Token şifreli saklanır ve hiçbir ekranda gösterilmez.</p>
+        <label>Bot token'ı
+          <input id="token" autocomplete="off" spellcheck="false" placeholder="123456789:AA...">
+        </label>
+        <div id="forward-box" class="notice" hidden>
+          <p><b>Bu botun zaten bir sunucusu var:</b> <span id="forward-url" class="mono"></span></p>
+          <p>Bağlarsan botun bozulmaz: mağaza ödemelerini ve /magaza, /orders, /paysupport, /terms komutlarını biz işleriz, diğer tüm güncellemeleri bu adrese aynen iletiriz. Menü butonuna ve komutlarına dokunmayız. Mağazayı silersen eski webhook geri yüklenir.</p>
+          <label>Sunucunun webhook gizli anahtarı (varsa)
+            <input id="forward-secret" autocomplete="off" spellcheck="false" placeholder="secret_token">
+          </label>
+        </div>
+        <button class="btn wide" id="connect">Bağla</button>
+      </article>
+    </section>
+
+    <!-- one shop -->
+    <section id="view-shop" class="view" hidden>
+      <button class="link back" data-back>‹ Mağazalarım</button>
+      <article class="card">
+        <div class="row">
+          <h3 id="shop-title"></h3>
+          <span id="shop-status" class="badge"></span>
+        </div>
+        <p class="muted" id="shop-meta"></p>
+        <div id="sync-error" class="notice error" hidden>
+          <p id="sync-error-text"></p>
+          <button class="btn" id="resync">Telegram'a yeniden bağla</button>
+        </div>
+        <div class="toggle-row">
+          <span><b>Satış</b> <span class="muted" id="sales-hint"></span></span>
+          <button class="switch" id="sales" role="switch" aria-checked="false"><span></span></button>
+        </div>
+      </article>
+
+      <div class="stats" id="stats"></div>
+
+      <div class="section-head">
+        <h2>Ürünler <span class="muted" id="product-count"></span></h2>
+        <button class="btn" id="add-product">+ Ürün</button>
+      </div>
+      <div id="products" class="list"></div>
+
+      <h2>Ayarlar</h2>
+      <article class="card form">
+        <label>Mağaza adı <input id="f-shop-name" maxlength="64"></label>
+        <label>Destek metni <span class="muted">(/paysupport yanıtı)</span>
+          <textarea id="f-support" maxlength="1024" rows="2" placeholder="Ödeme sorunları için: @kullanici"></textarea></label>
+        <label>Satış koşulları <span class="muted">(/terms yanıtı)</span>
+          <textarea id="f-terms" maxlength="2048" rows="3" placeholder="Dijital ürün, teslimat anında. İade talepleri 7 gün içinde /paysupport ile."></textarea></label>
+        <label id="f-forward-wrap" hidden>Yönlendirme gizli anahtarı <span class="muted" id="f-forward-hint"></span>
+          <input id="f-forward-secret" autocomplete="off" spellcheck="false" placeholder="değiştirmek için yaz"></label>
+        <button class="btn wide" id="save-settings">Kaydet</button>
+      </article>
+
+      <h2>Son ödemeler</h2>
+      <div id="payments" class="list"></div>
+
+      <div id="issues-wrap" hidden>
+        <h2>Bekleyen sorunlar</h2>
+        <p class="muted">Eşleşmeyen ya da teslim edilemeyen ödemeler. İade et ya da alıcıya elle teslim et.</p>
+        <div id="issues" class="list"></div>
+      </div>
+
+      <button class="link danger" id="delete-shop">Mağazayı kaldır</button>
+    </section>
+
+    <!-- product editor -->
+    <section id="view-product" class="view" hidden>
+      <button class="link back" data-back-shop>‹ Mağaza</button>
+      <article class="card form">
+        <h3 id="product-heading">Yeni ürün</h3>
+        <label>Kimlik <span class="muted">(a-z, 0-9, - ve _; sonradan değişmez)</span>
+          <input id="p-id" maxlength="32" autocomplete="off" spellcheck="false" placeholder="vip-kulup"></label>
+        <label>Başlık <input id="p-title" maxlength="32" placeholder="VIP Kulüp"></label>
+        <label>Açıklama <textarea id="p-description" maxlength="255" rows="2"></textarea></label>
+        <div class="two">
+          <label>Fiyat (⭐) <input id="p-stars" type="number" min="1" max="100000" inputmode="numeric" value="50"></label>
+          <label>Tür
+            <select id="p-kind">
+              <option value="one_time">Tek seferlik</option>
+              <option value="subscription">Aylık abonelik</option>
+            </select>
+          </label>
+        </div>
+        <label>Teslim içeriği <span class="muted">(ödemeden sonra gösterilir: metin, link, davet linki)</span>
+          <textarea id="p-content" maxlength="4096" rows="4" placeholder="Kulübe katıl: https://t.me/+DAVET"></textarea></label>
+        <label>Görsel adresi <span class="muted">(isteğe bağlı, https)</span>
+          <input id="p-photo" maxlength="1024" placeholder="https://..."></label>
+        <button class="btn wide" id="save-product">Kaydet</button>
+      </article>
+    </section>
+
+    <div id="outside" class="empty" hidden>Panel Telegram içinden, platform botu üzerinden açılmalı.</div>
+  </main>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script src="/panel/static/panel.js"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+# Hub: tek sunucuda birçok bot sahibine kiralık Stars mağazası.
+#   cp hub.env.example .env.hub   # değerleri doldur
+#   docker compose -f docker-compose.hub.yml up -d --build
+#   docker compose -f docker-compose.hub.yml exec hub python -m app.hubcli setup
+# Cloudflare Tunnel ile: deploy/docker-compose.hub-tunnel.yml dosyasını da ekle.
+services:
+  hub:
+    build: .
+    env_file: .env.hub
+    environment:
+      HUB_DATA_DIR: /srv/data/hub
+    command: ["uvicorn", "app.hub:app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+    volumes:
+      - hub-data:/srv/data
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    # Tek replika: kiracı veritabanları SQLite.
+volumes:
+  hub-data:

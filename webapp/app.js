@@ -32,12 +32,14 @@
     return node;
   };
 
+  // Single shop: Mini App at /app, API at /api. Hub: each tenant shop under /s/<bot>/ (API at /s/<bot>/api).
+  const BASE = (location.pathname.match(/^\/s\/[^/]+/) || [""])[0];
   let config = { support: "", terms: "" };
   let owned = new Set();
 
   // ---------------------------------------------------------------- api
   async function api(path, options = {}) {
-    const response = await fetch(path, {
+    const response = await fetch(BASE + path, {
       ...options,
       headers: { "Content-Type": "application/json", "X-Telegram-Init-Data": tg ? tg.initData : "", ...(options.headers || {}) },
     });
@@ -247,6 +249,15 @@
       config = await api("/api/config");
       $("shop-name").textContent = config.shop_name;
       document.title = config.shop_name;
+      if (config.powered_by && /^https:\/\//.test(config.powered_by.url)) {
+        const link = el("button", "link", config.powered_by.text);
+        link.addEventListener("click", () => {
+          const url = config.powered_by.url;
+          url.startsWith("https://t.me/") ? tg.openTelegramLink(url) : tg.openLink(url);
+        });
+        $("powered").replaceChildren(link);
+        $("powered").hidden = false;
+      }
     } catch (_) { /* keep defaults */ }
     await loadLibrary().catch(() => {});
     show("shop");

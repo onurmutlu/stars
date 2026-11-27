@@ -25,6 +25,37 @@ Telegram, botlarda ve Mini App'lerde satılan dijital ürünlerin, aboneliklerin
 - **Kimlik doğrulama:** Mini App'ten gelen her istek `initData` HMAC imzasıyla doğrulanır; istemciye güvenilmez.
   Webhook, `X-Telegram-Bot-Api-Secret-Token` ile korunur.
 
+## Hub: başka bot sahiplerine kiralık mağaza
+
+Aynı motor, tek sunucuda **birçok botun mağazasını** çalıştırır. Bot sahibi platform botuna token'ını verir,
+panelden ürünlerini ekler, satışı açar. Kod, sunucu ya da HTTPS kurmaz.
+
+- **Para platforma uğramaz.** Faturalar satıcının kendi botuyla kesilir; Stars doğrudan onun bot bakiyesine yatar,
+  Fragment'ten kendisi çeker. Platform geliri: Pro plan (platform botunda aylık Star aboneliği).
+- **Planlar:** yeni satıcıya 14 gün deneme (Pro özellikleri). Ücretsiz: 1 mağaza, 3 ürün, vitrinde platform etiketi.
+  Pro (varsayılan 500⭐/ay): 5 mağaza, mağaza başına 100 ürün, markasız. Hepsi `.env.hub` ile ayarlanır.
+  Plan düşerse fazla ürünler silinmez, sadece satıştan çekilir.
+- **Mevcut botu bozmadan bağlama (yönlendirme modu):** botun zaten bir sunucusu varsa panel bunu fark eder ve onay ister.
+  Onaylanınca mağaza güncellemelerini (kendi faturaları, ödemeleri, iadeleri, `/magaza`, `/orders`, `/paysupport`, `/terms`)
+  hub işler, geri kalan her güncelleme eski webhook adresine aynen iletilir. Menü butonu ve komutlara dokunulmaz.
+  Mağaza kaldırılınca eski webhook geri yüklenir.
+- **Satıcı paneli (Mini App):** mağaza bağlama, ürün ekle/düzenle/kaldır, destek ve koşul metni, satış aç/kapat,
+  son 30 gün ve toplam Stars, alıcı sayısı, son ödemeler, tek dokunuşla iade, bekleyen ödeme sorunları, Pro'ya geçiş.
+- **Ayrım ve güvenlik:** bot token'ları `HUB_MASTER_KEY` ile şifreli saklanır, hiçbir API'de dönmez; her mağazanın ayrı
+  SQLite dosyası, ayrı webhook yolu ve gizli anahtarı vardır; alıcı oturumu o mağazanın kendi bot imzasıyla doğrulanır;
+  satıcı sadece kendi mağazalarını görür. Sohbete yapıştırılan token mesajı bot tarafından silinir.
+- **Operatör:** `python -m app.hubcli tenants` (tüm mağazalar, plan, ödeme, sorun), `suspend` / `unsuspend`
+  (askıdaki mağaza satış yapamaz ama gelen ödemeler kaydedilmeye devam eder).
+
+```bash
+cp hub.env.example .env.hub && python -m app.hubcli keys     # anahtarları .env.hub'a koy
+docker compose -f docker-compose.hub.yml up -d --build
+docker compose -f docker-compose.hub.yml exec hub python -m app.hubcli setup
+```
+
+Adresler: `/panel` (satıcı paneli), `/s/<bot_kullanıcı_adı>` (alıcı mağazası), `/t/<id>/webhook`, `/hub/webhook`.
+Ayrıntılar: [deploy/README.md](deploy/README.md#hub-kiralık-mağaza-altyapısı).
+
 ## Yapı
 
 ```
@@ -36,8 +67,12 @@ app/
   telegram.py   Bot API istemcisi (token'ı loglara yazmaz)
   config.py     ortam değişkenleri ve products.json doğrulaması
   cli.py        setup / poll / issues / refund / check
-webapp/         Mini App (derleme gerektirmeyen HTML/CSS/JS)
-tests/          47 test: imza, ödeme kuralları, iade, abonelik, webhook
+  hub.py        çok kiracılı sunucu: kiracı mağazaları, ana bot, satıcı paneli API'si, yönlendirme
+  tenants.py    kiracı kaydı, şifreli token, planlar, ürün kataloğu
+  hubcli.py     keys / check / setup / tenants / suspend / unsuspend
+webapp/         alıcı Mini App'i (derleme gerektirmeyen HTML/CSS/JS; tek mağaza ve hub ortak)
+panel/          satıcı paneli Mini App'i
+tests/          67 test: imza, ödeme kuralları, iade, abonelik, webhook, kiracı ayrımı, planlar, yönlendirme
 ```
 
 ## Kurulum
@@ -105,4 +140,9 @@ A ready-to-deploy Telegram **Mini App shop for Telegram Stars (XTR)**: one-time 
 subscriptions, server-side `initData` verification, strict pre-checkout validation, idempotent payment recording,
 operator queue for unmatched payments, delivery with retries, refunds (admin command, CLI and Telegram-initiated),
 and the required `/paysupport` and `/terms` commands. FastAPI + SQLite backend, no-build HTML/JS front end,
-Docker setup and 47 tests. Configure `.env` and `products.json`, run `python -m app.cli setup`, done.
+Docker setup and 67 tests. Configure `.env` and `products.json`, run `python -m app.cli setup`, done.
+
+**Hub mode** (`app.hub`) rents the same shop to other bot owners: they connect their own bot token in a seller panel
+Mini App, Stars go straight to their bot balance, and the platform sells a monthly Pro plan as a Star subscription.
+Tokens are encrypted at rest, each tenant has its own database file, webhook path and secret, and bots that already
+have a backend can be connected in forward mode (non-shop updates are relayed to their original webhook).

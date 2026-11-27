@@ -5,6 +5,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app app
 COPY webapp webapp
+COPY panel panel
 RUN useradd --create-home shop && mkdir -p /srv/data && chown shop /srv/data
 USER shop
 EXPOSE 8000

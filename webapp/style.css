@@ -59,3 +59,5 @@ main { padding: 16px; padding-bottom: 72px; }
 
 @media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
 .card > .badge { align-self: flex-start; }
+.powered { margin-left: 6px; opacity: .75; }
+.powered .link { color: var(--hint); font-size: 12px; }

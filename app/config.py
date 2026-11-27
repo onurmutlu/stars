@@ -39,6 +39,37 @@ class Product:
             "photo_url": self.photo_url,
         }
 
+def validate_product(item: dict) -> Product:
+    """Build a Product from a JSON object, or raise ConfigError with a message for the seller."""
+    if not isinstance(item, dict):
+        raise ConfigError("Ürün bir JSON nesnesi olmalı")
+    product = Product(
+        id=item.get("id", ""),
+        title=item.get("title", ""),
+        description=item.get("description", ""),
+        stars=item.get("stars"),
+        content=item.get("content", ""),
+        kind=item.get("kind") or "one_time",
+        photo_url=item.get("photo_url") or None,
+    )
+    if not isinstance(product.id, str) or not PRODUCT_ID.match(product.id):
+        raise ConfigError(f"Geçersiz ürün id: {product.id!r} (a-z, 0-9, _ ve -; en fazla 32)")
+    if not isinstance(product.title, str) or not 1 <= len(product.title) <= 32:
+        raise ConfigError(f"{product.id}: başlık 1–32 karakter olmalı")
+    if not isinstance(product.description, str) or not 1 <= len(product.description) <= 255:
+        raise ConfigError(f"{product.id}: açıklama 1–255 karakter olmalı")
+    if not isinstance(product.stars, int) or isinstance(product.stars, bool) or not 1 <= product.stars <= 100000:
+        raise ConfigError(f"{product.id}: stars 1–100000 arası bir tam sayı olmalı")
+    if not isinstance(product.content, str) or not 1 <= len(product.content) <= 4096:
+        raise ConfigError(f"{product.id}: teslim içeriği 1–4096 karakter olmalı")
+    if product.kind not in KINDS:
+        raise ConfigError(f"{product.id}: kind {KINDS} değerlerinden biri olmalı")
+    if product.photo_url and (not isinstance(product.photo_url, str) or not product.photo_url.startswith("https://")
+                              or len(product.photo_url) > 1024):
+        raise ConfigError(f"{product.id}: photo_url https:// ile başlamalı")
+    return product
+
+
 
 def load_products(path: str | Path) -> dict[str, Product]:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -46,31 +77,9 @@ def load_products(path: str | Path) -> dict[str, Product]:
         raise ConfigError("products.json bir liste olmalı")
     products: dict[str, Product] = {}
     for item in raw:
-        product = Product(
-            id=item.get("id", ""),
-            title=item.get("title", ""),
-            description=item.get("description", ""),
-            stars=item.get("stars"),
-            content=item.get("content", ""),
-            kind=item.get("kind", "one_time"),
-            photo_url=item.get("photo_url"),
-        )
-        if not PRODUCT_ID.match(product.id):
-            raise ConfigError(f"Geçersiz ürün id: {product.id!r} (a-z, 0-9, _ ve -; en fazla 32)")
+        product = validate_product(item)
         if product.id in products:
             raise ConfigError(f"Tekrarlanan ürün id: {product.id}")
-        if not 1 <= len(product.title) <= 32:
-            raise ConfigError(f"{product.id}: başlık 1–32 karakter olmalı")
-        if not 1 <= len(product.description) <= 255:
-            raise ConfigError(f"{product.id}: açıklama 1–255 karakter olmalı")
-        if not isinstance(product.stars, int) or isinstance(product.stars, bool) or product.stars < 1:
-            raise ConfigError(f"{product.id}: stars pozitif bir tam sayı olmalı")
-        if not 1 <= len(product.content) <= 4096:
-            raise ConfigError(f"{product.id}: teslim içeriği 1–4096 karakter olmalı")
-        if product.kind not in KINDS:
-            raise ConfigError(f"{product.id}: kind {KINDS} değerlerinden biri olmalı")
-        if product.photo_url and not product.photo_url.startswith("https://"):
-            raise ConfigError(f"{product.id}: photo_url https:// ile başlamalı")
         products[product.id] = product
     return products
 
