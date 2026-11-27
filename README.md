@@ -121,13 +121,28 @@ python -m app.cli issues                 # iade ya da elle teslimat bekleyen öd
 python -m app.cli refund CHARGE_ID       # onay sorar; --yes ile sormaz
 ```
 
-Bot içinden admin (`ADMIN_IDS`): `/admin`, `/musteriler`, `/kod`, `/duyuru`, `/dosya`, `/issues`, `/refund CHARGE_ID`.
+Bot içinden admin (`ADMIN_IDS`): `/admin`, `/musteriler`, `/kod`, `/duyuru`, `/dosya`, `/rapor`, `/issues`, `/refund CHARGE_ID`.
+Alıcı: `/orders`, `/davet`, `/durdur`, `/baslat`, `/paysupport`, `/terms`.
 
 **Dosya teslimi:** Dosyayı (PDF, video, zip, ses, foto) bota gönder, açıklamasına `/dosya <ürün-kimliği>` yaz. Ödemeden
 sonra bot dosyayı alıcıya iletilemez/kaydedilemez olarak gönderir. `/dosya <ürün> sil` kaldırır.
 
 **Süreli erişim:** Tek seferlik ürüne `access_days` (1–3650) ver: tek ödeme, N gün erişim. Süre bitince içerik kapanır,
 kanal ürünüyse kişi kanaldan çıkar, alıcıya "süren doldu, yeniden al" mesajı gider. Otomatik çekim yok.
+Bitişe 3 gün kala hatırlatma gider; o günlerde tekrar alırsa yeni süre kalan günlerin üstüne eklenir.
+
+**Paket:** Ürüne `includes: ["rehber", "sablon"]` (en fazla 10 tek seferlik ürün) ver: tek ödemeyle hepsi açılır.
+Mini App "ayrı ayrı ⭐N, paketle ⭐M kazanırsın" gösterir. Paket iade edilirse içindekiler de geri alınır.
+
+**Stok ve satış bitişi:** `stock: 50` sınırlı adet ("Son 4", "Tükendi"); `sale_until: "2026-12-31"` ya da
+`"2026-12-31 18:00"` o andan sonra ürünü gizler, son 7 günde geri sayım görünür. Sipariş ve ödeme anında kontrol edilir.
+
+**Davet programı:** `REFERRAL_PERCENT=15` (Hub'da mağaza ayarı). Alıcı `/davet` ya da Mini App'teki "Arkadaşını davet et"
+ile `t.me/<bot>?start=ref_<id>` linkini paylaşır. Gelen kişinin ilk ücretli alışverişinde davet edene %15'lik, tek
+kullanımlık, 30 gün geçerli bir kod gider. Kişi başına bir ödül; kendi kendini davet işe yaramaz.
+
+**CSV rapor:** `/rapor` (ya da Hub panelinde "CSV raporu bota gönder") satislar.csv ve musteriler.csv dosyalarını bot
+sohbetine gönderir; Excel Türkçe karakterleri doğru açar (UTF-8 BOM, `;` ayraç).
 
 **İndirim kodları:** `/kod YAZ20 20 7g 50x [ürün]` → %20, 7 gün, 50 kullanım. `/kod` listeler, `/kod YAZ20 sil` kapatır.
 Alıcı Mini App'te kodu yazar ya da `t.me/<bot>?start=kod_YAZ20` kampanya linkiyle gelir (kod otomatik uygulanır).

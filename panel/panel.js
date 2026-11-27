@@ -366,6 +366,7 @@
     $("f-shop-name").value = s.shop_name;
     $("f-support").value = s.support_text;
     $("f-terms").value = s.terms_text;
+    $("f-referral").value = s.referral_percent ? String(s.referral_percent) : "";
     $("f-forward-wrap").hidden = s.mode !== "forward";
     $("f-forward-hint").textContent = s.forward_secret_set ? "(kayıtlı)" : "(kayıtlı değil)";
     $("f-forward-secret").value = "";
@@ -384,7 +385,8 @@
     const foot = el("div", "row");
     const kindText = p.kind === "subscription" ? "Aylık abonelik" : (p.access_days ? `${p.access_days} gün erişim` : "Tek seferlik");
     foot.append(el("span", p.over_limit ? "badge off" : "badge",
-      p.over_limit ? "Plan sınırı dışında, satılmıyor" : kindText + (p.file ? " · 📎" : "") + (p.channel_id ? " · 📣" : "")));
+      p.over_limit ? "Plan sınırı dışında, satılmıyor" : kindText + (p.file ? " · 📎" : "") + (p.channel_id ? " · 📣" : "") +
+      (p.includes ? " · 🧺 paket" : "") + (p.stock ? ` · stok ${p.stock}` : "") + (p.sale_until ? " · ⏰" : "")));
     const actions = el("div", "actions");
     const edit = el("button", "btn small ghost", "Düzenle");
     edit.addEventListener("click", () => openProduct(p));
@@ -448,14 +450,26 @@
   }
 
   async function saveSettings() {
-    const data = { shop_name: $("f-shop-name").value, support_text: $("f-support").value, terms_text: $("f-terms").value };
+    const data = { shop_name: $("f-shop-name").value, support_text: $("f-support").value, terms_text: $("f-terms").value,
+      referral_percent: parseInt($("f-referral").value || "0", 10) || 0 };
     if (shop.mode === "forward" && $("f-forward-secret").value.trim()) data.forward_secret = $("f-forward-secret").value.trim();
     shop = { ...shop, ...(await api(`/panel/api/shops/${shop.id}`, json("PATCH", data))) };
     toast("Kaydedildi.");
     renderShop();
   }
 
+  async function sendReport() {
+    await api(`/panel/api/shops/${shop.id}/report`, json("POST", {}));
+    toast(`Satış ve müşteri dosyaları @${shop.username} sohbetine gönderildi.`);
+  }
+
   // ---------------------------------------------------------------- product editor
+  const localInput = (epoch) => {
+    if (!epoch) return "";
+    const d = new Date(epoch * 1000);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
   function openProduct(p) {
     editing = p ? p.id : null;
     $("product-heading").textContent = p ? "Ürünü düzenle" : "Yeni ürün";
@@ -471,8 +485,15 @@
     $("p-badge").value = p && p.badge ? p.badge : "";
     $("p-channel").value = p && p.channel_id ? String(p.channel_id) : "";
     $("p-days").value = p && p.access_days ? String(p.access_days) : "";
+    $("p-includes").value = p && p.includes ? p.includes : "";
+    $("p-stock").value = p && p.stock ? String(p.stock) : "";
+    $("p-until").value = localInput(p && p.sale_until);
     $("p-file-id").textContent = p ? p.id : "ürün-kimliği";
-    const syncKind = () => { $("p-days-wrap").hidden = $("p-kind").value === "subscription"; };
+    const syncKind = () => {
+      const sub = $("p-kind").value === "subscription";
+      $("p-days-wrap").hidden = sub;
+      $("p-includes-wrap").hidden = sub;
+    };
     $("p-kind").onchange = syncKind;
     syncKind();
     $("p-channels").replaceChildren(...(shop.channels || []).map((c) => {
@@ -492,6 +513,9 @@
       category: $("p-category").value.trim() || null, badge: $("p-badge").value.trim() || null,
       channel_id: $("p-channel").value.trim() || null,
       access_days: $("p-kind").value === "subscription" ? null : ($("p-days").value.trim() || null),
+      includes: $("p-kind").value === "subscription" ? null : ($("p-includes").value.trim() || null),
+      stock: $("p-stock").value.trim() || null,
+      sale_until: $("p-until").value ? $("p-until").value.replace("T", " ") : null,
     };
     const path = `/panel/api/shops/${shop.id}/products` + (editing ? `/${encodeURIComponent(editing)}` : "");
     await api(path, json(editing ? "PUT" : "POST", item));
@@ -515,6 +539,7 @@
     $("connect").addEventListener("click", () => guarded($("connect"), connect));
     $("sales").addEventListener("click", () => guarded($("sales"), toggleSales));
     $("save-settings").addEventListener("click", () => guarded($("save-settings"), saveSettings));
+    $("send-report").addEventListener("click", () => guarded($("send-report"), sendReport));
     $("add-product").addEventListener("click", () => openProduct(null));
     $("refresh-customers").addEventListener("click", () => guarded($("refresh-customers"), loadCustomers));
     $("promo-add").addEventListener("click", () => guarded($("promo-add"), addPromo));

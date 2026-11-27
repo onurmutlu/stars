@@ -27,6 +27,12 @@
       error: "Bir şeyler ters gitti. Tekrar dene.", until: "Geçerlilik:", refunded: "İade edildi", expired: "Süresi doldu",
       share_text: "{title} · ⭐ {n}", per_month: "/ 30 gün", admin: "⚙️ Yönetim",
       foot_admin: "Yönetim paneli", foot_license: "Lisans yönetimi", foot_buy: "Sen de mağaza aç",
+      bundle_tag: "Paket", fact_bundle: "Pakette: {list}. Ayrı ayrı ⭐ {n}; paketle ⭐ {save} kazanırsın.",
+      fact_bundle_plain: "Pakette: {list}. Hepsi tek ödemeyle açılır.",
+      left_n: "Son {n}", sold_out: "Tükendi", fact_left: "Sınırlı sayıda: {n} adet kaldı.",
+      ends_in: "⏰ {when} kaldı", fact_ends: "Satış {date} tarihinde kapanır.", days_short: "{n} gün", hours_short: "{n} saat",
+      invite_title: "🎁 Arkadaşını davet et", invite_text: "Linkinle gelen biri ilk alışverişini yapınca sana %{p} indirim kodu gelir.",
+      invite_share: "Davet linkini paylaş", invite_msg: "{shop} · Telegram içinde Stars ile alışveriş",
     },
     en: {
       tab_shop: "Shop", tab_library: "My purchases", support: "Payment support", terms: "Terms",
@@ -50,6 +56,12 @@
       error: "Something went wrong. Please try again.", until: "Valid until:", refunded: "Refunded", expired: "Expired",
       share_text: "{title} · ⭐ {n}", per_month: "/ 30 days", admin: "⚙️ Admin",
       foot_admin: "Admin panel", foot_license: "License", foot_buy: "Open your own shop",
+      bundle_tag: "Bundle", fact_bundle: "Includes: {list}. Separately ⭐ {n}; you save ⭐ {save}.",
+      fact_bundle_plain: "Includes: {list}. All unlocked with one payment.",
+      left_n: "{n} left", sold_out: "Sold out", fact_left: "Limited: {n} left.",
+      ends_in: "⏰ {when} left", fact_ends: "Sale closes on {date}.", days_short: "{n} days", hours_short: "{n} hours",
+      invite_title: "🎁 Invite a friend", invite_text: "When someone from your link makes a first purchase, you get a {p}% discount code.",
+      invite_share: "Share your invite link", invite_msg: "{shop} · shop with Stars inside Telegram",
     },
   };
   const t = (key, vars = {}) => {
@@ -162,6 +174,30 @@
   }
 
   // ---------------------------------------------------------------- shop
+  // limited stock, sale deadline and bundle contents
+  const byId = (id) => products.find((p) => p.id === id);
+  function timeLeft(until) {
+    const seconds = until - Date.now() / 1000;
+    if (seconds <= 0) return null;
+    return seconds >= 86400 ? t("days_short", { n: Math.ceil(seconds / 86400) }) : t("hours_short", { n: Math.max(1, Math.ceil(seconds / 3600)) });
+  }
+  function scarcity(product) {
+    if (product.sold_out) return el("span", "badge off", t("sold_out"));
+    if (product.left != null && product.left <= 10) return el("span", "badge hot", t("left_n", { n: product.left }));
+    const left = product.sale_until && timeLeft(product.sale_until);
+    if (left && product.sale_until - Date.now() / 1000 < 7 * 86400) return el("span", "badge hot", t("ends_in", { when: left }));
+    return null;
+  }
+  function bundleFact(product) {
+    const parts = (product.includes || []).map(byId).filter(Boolean);
+    const names = parts.map((p) => p.title);
+    if (!parts.length) return null;
+    const total = parts.reduce((sum, p) => sum + p.stars, 0);
+    return total > product.stars
+      ? t("fact_bundle", { list: names.join(", "), n: total, save: total - product.stars })
+      : t("fact_bundle_plain", { list: names.join(", ") });
+  }
+
   async function loadProducts() {
     const container = $("products");
     container.replaceChildren(...Array.from({ length: 4 }, () => el("div", "skeleton")));
@@ -212,6 +248,8 @@
     const thumb = el("div", "thumb");
     thumb.append(picture(product));
     if (product.badge) thumb.append(el("span", "badge solid flag", product.badge));
+    else if ((product.includes || []).length) thumb.append(el("span", "badge solid flag", t("bundle_tag")));
+    if (product.sold_out) card.classList.add("sold");
     const info = el("div", "info");
     info.append(el("h3", "", product.title), el("p", "", product.description));
     const row = el("div", "row");
@@ -219,6 +257,8 @@
     if (owned.has(product.id)) row.append(el("span", "mine", t("yours")));
     else if (product.kind === "subscription") row.append(el("span", "badge", t("per_month")));
     else if (product.access_days) row.append(el("span", "badge", t("per_days", { n: product.access_days })));
+    const hint = !owned.has(product.id) && scarcity(product);
+    if (hint) row.append(hint);
     info.append(row);
     card.append(thumb, info);
     card.addEventListener("click", () => { haptic("light"); openDetail(product); });
@@ -236,6 +276,9 @@
     if (product.kind === "subscription") tags.push(el("span", "badge", t("monthly")));
     if (product.channel) tags.push(el("span", "badge", t("channel_tag")));
     if (product.access_days) tags.push(el("span", "badge", t("days_tag", { n: product.access_days })));
+    if ((product.includes || []).length) tags.push(el("span", "badge", t("bundle_tag")));
+    const hint = !isOwned && scarcity(product);
+    if (hint) tags.push(hint);
     if (isOwned) tags.push(el("span", "badge ok", t("yours")));
     $("detail-tags").replaceChildren(...tags);
     $("detail-title").textContent = product.title;
@@ -243,7 +286,11 @@
     $("detail-desc").textContent = product.description;
     const facts = [["⚡", t("fact_instant")], product.kind === "subscription" ? ["🔁", t("fact_sub")]
       : product.access_days ? ["⏳", t("fact_days", { n: product.access_days })] : ["📦", t("fact_once")]];
+    const bundle = bundleFact(product);
+    if (bundle) facts.push(["🧺", bundle]);
     if (product.file) facts.push(["📎", t("fact_file")]);
+    if (product.left != null && !product.sold_out) facts.push(["📉", t("fact_left", { n: product.left })]);
+    if (product.sale_until) facts.push(["⏰", t("fact_ends", { date: formatDate(product.sale_until) })]);
     if (product.channel) {
       facts.push(["📣", t("fact_channel")]);
       if (product.kind === "subscription") facts.push(["🔒", t("fact_channel_sub")]);
@@ -258,14 +305,16 @@
     $("promo-box").hidden = isOwned || product.kind === "subscription";
     $("promo-code").value = promoCode;
     $("promo-note").hidden = true;
-    const label = isOwned ? t("open") : t("buy_for", { n: product.stars });
+    const soldOut = !isOwned && product.sold_out;
+    const label = isOwned ? t("open") : soldOut ? t("sold_out") : t("buy_for", { n: product.stars });
     $("detail-buy").textContent = label;
-    $("detail-buy").disabled = false;
+    $("detail-buy").disabled = soldOut;
+    if (soldOut) $("promo-box").hidden = true;
     $("detail-share").hidden = !config.bot_username;
     returnTo = view === "detail" ? returnTo : (view === "library" ? "library" : "shop");
     show("detail");
-    showMainButton(label);
-    if (promoCode && !isOwned && product.kind !== "subscription") applyPromo(true);
+    soldOut ? hideMainButton() : showMainButton(label);
+    if (promoCode && !isOwned && !soldOut && product.kind !== "subscription") applyPromo(true);
   }
 
   // Discount code: ask the server for the price, show it, and buy with it.
@@ -354,7 +403,25 @@
       container.replaceChildren(el("div", "empty", error.message));
       return;
     }
-    container.replaceChildren(...(library.length ? library.map(libraryItem) : [el("div", "empty", t("empty_library"))]));
+    const items = library.length ? library.map(libraryItem) : [el("div", "empty", t("empty_library"))];
+    const invite = inviteCard();
+    container.replaceChildren(...(invite ? [invite] : []), ...items);
+  }
+
+  function inviteCard() {
+    const me = tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.id;
+    if (!config.referral_percent || !config.bot_username || !me) return null;
+    const card = el("article", "card invite");
+    card.append(el("h3", "", t("invite_title")), el("p", "", t("invite_text", { p: config.referral_percent })));
+    const button = el("button", "btn", t("invite_share"));
+    button.addEventListener("click", () => {
+      haptic("light");
+      const link = `https://t.me/${config.bot_username}?start=ref_${me}`;
+      const text = t("invite_msg", { shop: config.shop_name });
+      openLink(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`);
+    });
+    card.append(button);
+    return card;
   }
 
   function libraryItem(item) {

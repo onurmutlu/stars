@@ -70,6 +70,10 @@ main { padding: 14px 16px 96px; }
 .badge.solid { background: var(--star); color: #1a1200; }
 .badge.ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
 .badge.off { background: color-mix(in srgb, var(--hint) 18%, transparent); color: var(--hint); }
+.badge.hot { background: color-mix(in srgb, #e5484d 16%, transparent); color: #e5484d; }
+.product.sold { opacity: .6; }
+.card.invite { gap: 6px; min-height: 0; background: color-mix(in srgb, var(--btn) 10%, var(--card, transparent)); border: 1px solid color-mix(in srgb, var(--btn) 30%, transparent); }
+.card.invite p { margin: 4px 0 10px; color: var(--hint); font-size: 14px; }
 
 .buy-banner { margin-top: 16px; width: 100%; display: flex; align-items: center; gap: 12px; text-align: left; cursor: pointer;
   border: 1px dashed color-mix(in srgb, var(--star) 70%, transparent); border-radius: var(--radius); padding: 14px 16px;

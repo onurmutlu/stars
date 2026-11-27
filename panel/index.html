@@ -119,9 +119,12 @@
           <textarea id="f-support" maxlength="1024" rows="2" placeholder="Ödeme sorunları için: @kullanici"></textarea></label>
         <label>Satış koşulları <span class="muted">(/terms yanıtı)</span>
           <textarea id="f-terms" maxlength="2048" rows="3" placeholder="Dijital ürün, teslimat anında. İade talepleri 7 gün içinde /paysupport ile."></textarea></label>
+        <label>Davet indirimi % <span class="muted">(0 = kapalı; arkadaşı ilk alışverişi yapan alıcıya tek kullanımlık kod)</span>
+          <input id="f-referral" type="number" min="0" max="90" inputmode="numeric" placeholder="0"></label>
         <label id="f-forward-wrap" hidden>Yönlendirme gizli anahtarı <span class="muted" id="f-forward-hint"></span>
           <input id="f-forward-secret" autocomplete="off" spellcheck="false" placeholder="değiştirmek için yaz"></label>
         <button class="btn wide" id="save-settings">Kaydet</button>
+        <button class="btn wide ghost" id="send-report" style="margin-top:8px">📊 CSV raporu bota gönder</button>
       </article>
 
       <h2>Son ödemeler</h2>
@@ -164,6 +167,14 @@
         </div>
         <label id="p-days-wrap">Erişim süresi (gün) <span class="muted">(isteğe bağlı: boş = süresiz; ör. 7, 30, 90)</span>
           <input id="p-days" type="number" min="1" max="3650" inputmode="numeric" placeholder="süresiz"></label>
+        <label id="p-includes-wrap">Paket içeriği <span class="muted">(isteğe bağlı: tek seferlik ürün kimlikleri, virgülle; ör. rehber,sablon)</span>
+          <input id="p-includes" maxlength="400" placeholder="rehber,sablon" autocomplete="off" spellcheck="false"></label>
+        <div class="two">
+          <label>Stok <span class="muted">(boş = sınırsız)</span>
+            <input id="p-stock" type="number" min="1" max="1000000" inputmode="numeric" placeholder="sınırsız"></label>
+          <label>Satış bitişi <span class="muted">(isteğe bağlı)</span>
+            <input id="p-until" type="datetime-local"></label>
+        </div>
         <p class="muted small" id="p-file-help">📎 Dosya teslimi: PDF, video ya da zip'i botuna gönder, açıklamasına <b>/dosya <span id="p-file-id">ürün-kimliği</span></b> yaz. Ödemeden sonra bot dosyayı alıcıya gönderir.</p>
         <label>Özel kanal / grup ID <span class="muted">(isteğe bağlı: ödeyene tek kullanımlık davet linki, süresi bitince çıkarma)</span>
           <input id="p-channel" inputmode="numeric" maxlength="24" placeholder="-1001234567890" list="p-channels" autocomplete="off"></label>
