@@ -1,0 +1,15 @@
+{
+  "name": "siyahkare-stars-site",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-01-01",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "stars.siyahkare.com/*",
+      "zone_name": "siyahkare.com"
+    }
+  ],
+  "observability": {
+    "enabled": false
+  }
+}
