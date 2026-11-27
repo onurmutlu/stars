@@ -349,10 +349,10 @@ class Hub:
     def stats(self, tenant) -> dict:
         db = self.store_for(tenant["id"]).db
         live = "NOT EXISTS (SELECT 1 FROM refunds r WHERE r.charge=p.charge)"
-        total = db.execute(f"SELECT COUNT(*), COALESCE(SUM(stars),0) FROM payments p WHERE {live}").fetchone()
-        month = db.execute(f"SELECT COUNT(*), COALESCE(SUM(stars),0) FROM payments p WHERE {live} AND created>=?",
+        total = db.execute(f"SELECT COUNT(*), COALESCE(SUM(stars),0) FROM payments p WHERE {live} AND stars>0").fetchone()
+        month = db.execute(f"SELECT COUNT(*), COALESCE(SUM(stars),0) FROM payments p WHERE {live} AND stars>0 AND created>=?",
                            (time.time() - 30 * 86400,)).fetchone()
-        refunds = db.execute("SELECT COUNT(*) FROM refunds").fetchone()[0]
+        refunds = db.execute("SELECT COUNT(*) FROM refunds WHERE charge NOT LIKE '%:%'").fetchone()[0]
         buyers = db.execute(f"SELECT COUNT(DISTINCT user) FROM payments p WHERE {live}").fetchone()[0]
         recent = db.execute(
             "SELECT p.charge, p.user, p.stars, p.created, p.expires, o.title, o.kind, "

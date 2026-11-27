@@ -233,6 +233,24 @@ class StarsShop:
                           MAX_DELIVERY_ATTEMPTS, order["id"])
 
     # ------------------------------------------------------------------ admins
+    async def _grant_bundle(self, user: int, order, charge: str) -> None:
+        """A bundle gives each included product as its own free order, tied to the bundle's charge
+        ('<charge>:<product>'), so a refund of the bundle takes them back too."""
+        bundle = self.products.get(order["product"])
+        if not bundle or not bundle.includes:
+            return
+        for child_id in bundle.includes:
+            child = self.products.get(child_id)
+            if not child or self.store.payment(f"{charge}:{child_id}"):
+                continue
+            child_order = self.store.create_order(user, child, stars=0)
+            expires = None
+            if child.access_days:
+                start = max(time.time(), self.store.active_until(user, child.id, exclude=child_order) or 0)
+                expires = int(start) + child.access_days * 86400
+            self.store.add_payment(f"{charge}:{child_id}", self.store.order(child_order), expires, False)
+            await self.try_deliver(self.store.order(child_order))
+
     async def notify_admins(self, text: str) -> None:
         for admin in self.settings.admin_ids:
             try:
@@ -664,6 +682,7 @@ class StarsShop:
         self.store.add_payment(charge, order, expires, bool(payment.get("is_recurring")))
         if order["promo"] and not renewal:
             self.store.count_promo_use(order["promo"])
+        await self._grant_bundle(user, order, charge)
         if order["channel"]:
             self.store.reopen_channel(order["id"])
         await self.try_deliver(self.store.order(order["id"]))

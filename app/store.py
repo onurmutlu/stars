@@ -182,8 +182,12 @@ class Store:
             "SELECT 1 FROM refunds WHERE charge=?", (charge,)).fetchone() is not None
 
     def mark_refunded(self, charge: str) -> None:
+        """Refunding a bundle also takes back what came with it (charges '<charge>:<product>')."""
         with self.db:
-            self.db.execute("INSERT OR IGNORE INTO refunds VALUES(?,?)", (charge, time.time()))
+            now = time.time()
+            self.db.execute("INSERT OR IGNORE INTO refunds VALUES(?,?)", (charge, now))
+            self.db.execute("INSERT OR IGNORE INTO refunds SELECT charge, ? FROM payments WHERE charge LIKE ? ESCAPE '\\'",
+                            (now, charge.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + ":%"))
 
     def record_issue(self, charge, user, stars, payload, reason: str) -> None:
         """Keep a payment the operator must look at (refund or manual delivery)."""
@@ -437,7 +441,8 @@ class Store:
     def summary(self, since: float, now: float) -> dict:
         live = "NOT EXISTS (SELECT 1 FROM refunds r WHERE r.charge=p.charge)"
         sales = self.db.execute(f"SELECT COUNT(*), COALESCE(SUM(stars),0), COALESCE(SUM(recurring),0) "
-                                f"FROM payments p WHERE {live} AND created>=? AND created<?", (since, now)).fetchone()
+                                f"FROM payments p WHERE {live} AND p.stars>0 AND created>=? AND created<?",
+                                (since, now)).fetchone()
         buyers = self.db.execute(
             "SELECT COUNT(*) FROM (SELECT user, MIN(created) AS first FROM payments GROUP BY user) "
             "WHERE first>=? AND first<?", (since, now)).fetchone()[0]
@@ -448,7 +453,7 @@ class Store:
             f"WHERE o.kind='subscription' AND {live} AND p.expires>?", (now,)).fetchone()[0]
         top = self.db.execute(
             f"SELECT o.title, COUNT(*) AS n FROM payments p JOIN orders o ON o.id=p.order_id "
-            f"WHERE {live} AND p.created>=? AND p.created<? GROUP BY o.title ORDER BY n DESC LIMIT 1",
+            f"WHERE {live} AND p.stars>0 AND p.created>=? AND p.created<? GROUP BY o.title ORDER BY n DESC LIMIT 1",
             (since, now)).fetchone()
         return {"sales": sales[0], "stars": sales[1], "renewals": sales[2], "new_buyers": buyers,
                 "refunds": refunds, "active_subscriptions": subs, "top": top["title"] if top else None}

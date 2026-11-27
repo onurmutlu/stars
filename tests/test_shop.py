@@ -1,3 +1,4 @@
+import pytest
 import asyncio
 import time
 
@@ -659,3 +660,48 @@ def test_timed_access_warns_and_extends_on_top_of_remaining_days(api, store):
         assert not api.of("banChatMember")                          # still a member through the renewal
         assert asyncio.run(shop.notify_expired(after_old_end)) == 0
         assert client.post("/api/orders", json={"product_id": "kamp"}, headers=headers()).status_code == 409
+
+
+# ------------------------------------------------------------------ bundles
+def bundle_client(api, store):
+    from fastapi.testclient import TestClient
+    from app.config import Product
+    from app.main import create_app
+    from tests.conftest import make_settings
+    products = {"deneme": Product("deneme", "Deneme", "d", 50, "Deneme linki"),
+                "kelime": Product("kelime", "Kelime", "k", 30, "Kelime linki", access_days=30),
+                "paket": Product("paket", "Paket", "ikisi", 60, "Paket hoş geldin", includes=("deneme", "kelime"))}
+    return TestClient(create_app(make_settings(), products, store, api, background=False))
+
+
+def test_bundle_gives_each_product_and_a_refund_takes_them_back(api, store):
+    with bundle_client(api, store) as client:
+        order_id = order(client, "paket")
+        hook(client, paid(order_id, amount=60, charge="b1"))
+        texts = [m["text"] for m in api.of("sendMessage") if m["chat_id"] == BUYER]
+        assert any("Deneme linki" in t for t in texts) and any("Kelime linki" in t for t in texts)
+        library = {i["product"]: i for i in client.get("/api/purchases", headers=headers()).json()}
+        assert {"paket", "deneme", "kelime"} <= set(library) and library["kelime"]["access_until"]
+        assert client.post("/api/orders", json={"product_id": "deneme"}, headers=headers()).status_code == 409
+        assert store.summary(time.time() - 60, time.time() + 60)["sales"] == 1  # one sale, not three
+        hook(client, paid(order_id, amount=60, charge="b1", update_id=4))          # duplicate update: no double grant
+        assert len(store.paid_orders(BUYER)) == 3
+        store.mark_refunded("b1")
+        assert not any(store.has_access(o) for o in store.paid_orders(BUYER))
+
+
+def test_bundle_rules(tmp_path):
+    import json
+    from app.config import ConfigError, load_products
+    base = {"title": "T", "description": "d", "stars": 5, "content": "c"}
+    def load(items):
+        path = tmp_path / "p.json"
+        path.write_text(json.dumps(items))
+        return load_products(path)
+    assert load([base | {"id": "a"}, base | {"id": "p", "includes": "a"}])["p"].includes == ("a",)
+    for bad in ([base | {"id": "p", "includes": ["yok"]}],
+                [base | {"id": "a", "kind": "subscription"}, base | {"id": "p", "includes": ["a"]}],
+                [base | {"id": "a"}, base | {"id": "q", "includes": ["a"]}, base | {"id": "p", "includes": ["q"]}],
+                [base | {"id": "p", "includes": ["p"]}]):
+        with pytest.raises(ConfigError):
+            load(bad)

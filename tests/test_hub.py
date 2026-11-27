@@ -518,3 +518,16 @@ def test_panel_broadcast_goes_to_shop_contacts_once_a_day(hub_client, world):
     import asyncio
     asyncio.run(hub_client.hub.shop(hub_client.hub.registry.tenant(shop["id"])).send_broadcasts())
     assert any(m["chat_id"] == BUYER and m["text"].startswith("Yeni ürün!") for m in world.bots[TOKEN_A].of("sendMessage"))
+
+
+def test_panel_bundle_must_reference_existing_one_time_products(hub_client, world):
+    shop = ready_shop(hub_client)
+    url = f"/panel/api/shops/{shop['id']}/products"
+    base = {"title": "T", "description": "d", "stars": 5, "content": "c"}
+    assert hub_client.post(url, headers=panel(), json=base | {"id": "paket", "includes": "yok"}).status_code == 400
+    assert hub_client.post(url, headers=panel(), json=base | {"id": "paket", "includes": "guide"}).status_code == 200
+    products = {p["id"]: p for p in hub_client.get(f"/s/{shop['username']}/api/products").json()}
+    assert products["paket"]["includes"] == ["guide"]
+    # a product inside a bundle cannot become a subscription
+    r = hub_client.put(f"{url}/guide", headers=panel(), json=base | {"kind": "subscription"})
+    assert r.status_code == 400
