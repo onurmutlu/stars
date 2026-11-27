@@ -171,6 +171,12 @@ class Store:
         with self.db:
             self.db.execute("INSERT OR IGNORE INTO expiry_warnings VALUES(?,?)", (order_id, time.time()))
 
+    def sold_count(self, product: str) -> int:
+        """Paid, unrefunded orders of a product (bundle grants included): what stock counts."""
+        return self.db.execute(
+            "SELECT COUNT(DISTINCT o.id) FROM orders o JOIN payments p ON p.order_id=o.id WHERE o.product=? "
+            "AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.charge=p.charge)", (product,)).fetchone()[0]
+
     def paid_orders(self, user: int):
         return self.db.execute(
             "SELECT * FROM orders WHERE user=? AND paid=1 ORDER BY created DESC", (user,)

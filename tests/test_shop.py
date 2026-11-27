@@ -705,3 +705,46 @@ def test_bundle_rules(tmp_path):
                 [base | {"id": "p", "includes": ["p"]}]):
         with pytest.raises(ConfigError):
             load(bad)
+
+
+# ------------------------------------------------------------------ stock and sale deadline
+def test_limited_stock_and_sale_deadline(api, store):
+    from fastapi.testclient import TestClient
+    from app.config import Product
+    from app.main import create_app
+    from tests.conftest import make_settings
+    products = {"erken": Product("erken", "Erken kayıt", "d", 10, "c", stock=1),
+                "bitti": Product("bitti", "Eski kamp", "d", 10, "c", sale_until=time.time() - 60),
+                "cuma": Product("cuma", "Cuma'ya kadar", "d", 10, "c", sale_until=time.time() + 86400)}
+    with TestClient(create_app(make_settings(), products, store, api, background=False)) as client:
+        catalog = {p["id"]: p for p in client.get("/api/products").json()}
+        assert "bitti" not in catalog and catalog["erken"]["left"] == 1 and catalog["cuma"]["sale_until"]
+        assert client.post("/api/orders", json={"product_id": "bitti"}, headers=headers()).status_code == 409
+        first = order(client, "erken")
+        second = client.post("/api/orders", json={"product_id": "erken"}, headers=headers(OTHER)).json()["order_id"]
+        hook(client, paid(first, amount=10, charge="s1"))
+        assert {p["id"]: p for p in client.get("/api/products").json()}["erken"]["sold_out"] is True
+        update = pre_checkout(second, amount=10, user_id=OTHER, qid="q7")
+        update["update_id"] = 7
+        hook(client, update)
+        answer = api.of("answerPreCheckoutQuery")[-1]
+        assert answer["ok"] is False and "tükendi" in answer["error_message"]
+        assert client.post("/api/orders", json={"product_id": "erken"}, headers=headers(3003)).status_code == 409
+        store.mark_refunded("s1")  # a refund gives the unit back
+        assert {p["id"]: p for p in client.get("/api/products").json()}["erken"]["left"] == 1
+
+
+def test_sale_until_formats(tmp_path):
+    import json
+    from app.config import ConfigError, load_products
+    base = {"id": "a", "title": "T", "description": "d", "stars": 5, "content": "c"}
+    def load(extra):
+        path = tmp_path / "p.json"
+        path.write_text(json.dumps([base | extra]))
+        return load_products(path)["a"]
+    day = load({"sale_until": "2030-12-05"}).sale_until
+    assert time.localtime(day)[:5] == (2030, 12, 5, 23, 59)
+    assert time.localtime(load({"sale_until": "2030-12-05T18:30"}).sale_until)[3:5] == (18, 30)
+    for bad in ({"sale_until": "5 aralık"}, {"stock": 0}, {"stock": "çok"}):
+        with pytest.raises(ConfigError):
+            load(bad)

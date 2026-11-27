@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -32,6 +33,8 @@ class Product:
     channel_id: int | None = None # private channel/group: buyers get a one-time invite, removed when access ends
     access_days: int | None = None # one-time purchase that gives N days of access (e.g. 7, 90, 365)
     includes: tuple[str, ...] = () # bundle: buying this also gives these one-time products
+    stock: int | None = None       # at most this many sales ("ilk 50 kişi")
+    sale_until: float | None = None # sales close at this moment (server time); "2026-12-05" means end of that day
 
     def public(self) -> dict:
         """What the Mini App may see before payment: never the content."""
@@ -47,6 +50,8 @@ class Product:
             "channel": self.channel_id is not None,
             "access_days": self.access_days,
             "includes": list(self.includes),
+            "stock": self.stock,
+            "sale_until": self.sale_until,
         }
 
 def _optional_text(value):
@@ -54,6 +59,23 @@ def _optional_text(value):
     if isinstance(value, str):
         return value.strip() or None
     return value
+
+
+def _moment(value):
+    """Epoch seconds, or a local date/time: 2026-12-05 (end of that day), 2026-12-05 18:00, 2026-12-05T18:00."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip().replace("T", " ")
+        for fmt, end_of_day in (("%Y-%m-%d %H:%M", False), ("%Y-%m-%d %H:%M:%S", False), ("%Y-%m-%d", True)):
+            try:
+                parsed = time.strptime(text, fmt)
+            except ValueError:
+                continue
+            return time.mktime(parsed) + (86399 if end_of_day else 0)
+    return value  # validation reports it
 
 
 def _id_list(value):
@@ -100,6 +122,8 @@ def validate_product(item: dict) -> Product:
         channel_id=_channel_id(item.get("channel_id")),
         access_days=_optional_int(item.get("access_days")),
         includes=_id_list(item.get("includes")),
+        stock=_optional_int(item.get("stock")),
+        sale_until=_moment(item.get("sale_until")),
     )
     if not isinstance(product.id, str) or not PRODUCT_ID.match(product.id):
         raise ConfigError(f"Geçersiz ürün id: {product.id!r} (a-z, 0-9, _ ve -; en fazla 32)")
@@ -129,6 +153,11 @@ def validate_product(item: dict) -> Product:
             raise ConfigError(f"{product.id}: erişim süresi 1–3650 gün olmalı")
         if product.kind == "subscription":
             raise ConfigError(f"{product.id}: abonelik zaten 30 günde bir yenilenir; süre sadece tek seferlik üründe kullanılır")
+    if product.stock is not None and (not isinstance(product.stock, int) or isinstance(product.stock, bool)
+                                      or not 1 <= product.stock <= 1_000_000):
+        raise ConfigError(f"{product.id}: stok 1 ile 1.000.000 arasında olmalı")
+    if product.sale_until is not None and not isinstance(product.sale_until, float):
+        raise ConfigError(f"{product.id}: satış bitişi 2026-12-05 ya da 2026-12-05 18:00 biçiminde olmalı")
     if product.includes:
         if not isinstance(product.includes, tuple) or len(product.includes) > 10 or len(set(product.includes)) != len(product.includes):
             raise ConfigError(f"{product.id}: paket en fazla 10 farklı ürün kimliği içerebilir")

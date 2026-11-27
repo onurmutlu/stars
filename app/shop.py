@@ -69,11 +69,28 @@ class StarsShop:
         self.api, self.settings, self.products, self.store = api, settings, products, store
 
     # ------------------------------------------------------------------ Mini App
+    def availability(self, product, now: float | None = None) -> tuple[str | None, int | None]:
+        """(why it cannot be bought now, or None; how many are left when stock is limited)."""
+        now = time.time() if now is None else now
+        left = max(0, product.stock - self.store.sold_count(product.id)) if product.stock else None
+        if product.sale_until and now > product.sale_until:
+            return "Bu ürünün satışı sona erdi.", left
+        if left == 0:
+            return "Bu ürün tükendi.", 0
+        return None, left
+
     def catalog(self) -> list[dict]:
         if not self.settings.sales_enabled:
             return []
         files = self.store.product_files()
-        return [p.public() | {"file": files.get(p.id, {}).get("kind")} for p in self.products.values()]
+        now = time.time()
+        items = []
+        for p in self.products.values():
+            if p.sale_until and now > p.sale_until:
+                continue  # closed sales disappear from the shop; buyers keep their purchases
+            reason, left = self.availability(p, now)
+            items.append(p.public() | {"file": files.get(p.id, {}).get("kind"), "left": left, "sold_out": left == 0})
+        return items
 
     def quote(self, product_id: str, code: str | None) -> dict:
         """Price of a product with an optional discount code; raises ShopError for a code that does not apply."""
@@ -104,6 +121,9 @@ class StarsShop:
             raise ShopError("Ürün bulunamadı.", 404)
         if self._owns(user, product.id):
             raise ShopError("Bu ürün zaten sende. 'Satın aldıklarım' bölümünden açabilirsin.", 409)
+        reason, _ = self.availability(product)
+        if reason:
+            raise ShopError(reason, 409)
         price = self.quote(product.id, code)
         order_id = self.store.create_order(user, product, stars=price["stars"], promo=price["code"])
         extra = {"subscription_period": SUBSCRIPTION_PERIOD} if product.kind == "subscription" else {}
@@ -649,7 +669,13 @@ class StarsShop:
             and not order["paid"]
             and time.time() - order["created"] <= self.settings.order_ttl
         )
-        extra = {} if ok else {"error_message": "Sipariş geçersiz ya da süresi doldu. Mağazayı yeniden açıp tekrar dene."}
+        message = "Sipariş geçersiz ya da süresi doldu. Mağazayı yeniden açıp tekrar dene."
+        product = self.products.get(order["product"]) if order else None
+        if ok and product:
+            reason, _ = self.availability(product)
+            if reason:
+                ok, message = False, reason
+        extra = {} if ok else {"error_message": message}
         await self.api("answerPreCheckoutQuery", pre_checkout_query_id=query["id"], ok=ok, **extra)
 
     async def _successful_payment(self, user: int, payment: dict, sender: dict | None = None) -> None:
