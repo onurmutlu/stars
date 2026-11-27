@@ -51,7 +51,9 @@ textarea { resize: vertical; }
 
 .product-item .row, .pay-item .row { margin-top: 0; }
 .product-item.over { opacity: .55; }
-.actions { display: flex; gap: 8px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.product-item .row:last-child { flex-wrap: wrap; gap: 8px; }
+.product-item .row:last-child .badge { white-space: normal; }
 .pay-item { gap: 2px; }
 .pay-item .meta { font-size: 12px; color: var(--hint); }
 p.muted.small { font-size: 12.5px; margin: -4px 0 4px; }
@@ -85,3 +87,13 @@ p.muted.small { font-size: 12.5px; margin: -4px 0 4px; }
 
 .check { display: flex; gap: 10px; align-items: flex-start; font-weight: 500; }
 .check input { width: 20px; height: 20px; margin-top: 2px; flex: none; }
+
+/* choice sheet, helpers */
+.sheet-back { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex; align-items: flex-end; z-index: 50; }
+.sheet { background: var(--bg); width: 100%; border-radius: 18px 18px 0 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+  display: grid; gap: 8px; max-height: 70vh; overflow: auto; }
+.sheet h3 { margin: 0 0 6px; }
+.btn.link { background: none; color: var(--hint); }
+.row.gap { gap: 8px; }
+.row.gap input { flex: 1; min-width: 0; }
+.helper { padding: 8px 0; border-top: 1px solid color-mix(in srgb, var(--hint) 18%, transparent); }

@@ -121,7 +121,7 @@ python -m app.cli issues                 # iade ya da elle teslimat bekleyen öd
 python -m app.cli refund CHARGE_ID       # onay sorar; --yes ile sormaz
 ```
 
-Bot içinden admin (`ADMIN_IDS`): `/admin`, `/musteriler`, `/kod`, `/duyuru`, `/dosya`, `/rapor`, `/kaynaklar`, `/yorumlar`, `/issues`, `/refund CHARGE_ID`.
+Bot içinden admin (`ADMIN_IDS`): `/admin`, `/musteriler`, `/kod`, `/duyuru`, `/dosya`, `/rapor`, `/kaynaklar`, `/yorumlar`, `/paylas`, `/foto`, `/issues`, `/refund CHARGE_ID`.
 Alıcı: `/orders`, `/davet`, `/durdur`, `/baslat`, `/paysupport`, `/terms`.
 
 **Dosya teslimi:** Dosyayı (PDF, video, zip, ses, foto) bota gönder, açıklamasına `/dosya <ürün-kimliği>` yaz. Ödemeden
@@ -179,6 +179,20 @@ mesajına o ürüne özel, 24 saat geçerli, tek kullanımlık %10 kod eklenir.
 **Satış webhook'u:** `SALE_WEBHOOK_URL=https://...` (Hub'da mağaza ayarı) ile her ödemede bu adrese JSON gider:
 `event` (sale/renewal), `product`, `title`, `stars`, `promo`, `gift`, `answer`, `user_id`, `username`, `name`, `time`.
 Zapier, Make ya da Google Apps Script ile tabloya yazmak için. Adres çalışmazsa satış etkilenmez.
+
+**Kurs modu:** Ürüne `lessons` ver (JSON'da `[{"title": "Giriş", "content": "..."}]`, panelde her ders `# Başlık`
+satırıyla başlar). `drip_days: 1` ile ilk ders hemen, sonra her gün bir yeni ders açılır ve bot alıcıya gönderir
+(uzun bir aradan sonra bile her turda en fazla bir ders, sel olmaz). Mini App'te "Satın aldıklarım"da ders listesi,
+kilitli derslerin açılış tarihi ve "2/10 ders" ilerlemesi görünür. En fazla 100 ders.
+
+**Kanala ürün kartı:** `/paylas <ürün>` kartı sana gönderir, kanalına iletirsin; `/paylas <ürün> @kanal` ya da `-100…`
+doğrudan kanala/gruba atar (bot orada yönetici olmalı). Kartta görsel, fiyat, puan, ders sayısı ve "⭐ N ile al" düğmesi
+var; düğme botu ürün sayfasıyla açar. Panelde her ürünün "📣 Paylaş" düğmesi aynı işi yapar.
+
+**Yardımcı yöneticiler:** Hub panelinde "Yardımcılar"a @kullanıcıadı ile en fazla 5 kişi eklenir (önce botu açıp
+/start yazmış olmalılar). Satış bildirimleri ve bot komutları onlara da gelir; panel ve iadeler sahibinde kalır.
+
+**Uyarılar:** Stok 10, 5, 3, 1 ve 0'a inince, ve her yeni yorumda yöneticilere mesaj gider.
 
 **CSV rapor:** `/rapor` (ya da Hub panelinde "CSV raporu bota gönder") satislar.csv ve musteriler.csv dosyalarını bot
 sohbetine gönderir; Excel Türkçe karakterleri doğru açar (UTF-8 BOM, `;` ayraç).

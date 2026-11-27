@@ -42,6 +42,8 @@ class Product:
     option: str | None = None      # this product's option label in the group ("7 gün", "30 gün")
     ask: str | None = None         # a question the buyer answers before paying ("E-posta adresin?")
     flexible: bool = False         # pay what you want: stars is the minimum, the buyer may pay more
+    lessons: tuple[tuple[str, str], ...] = ()  # course mode: (title, content) pairs
+    drip_days: int | None = None   # one new lesson every N days after the purchase (none = all at once)
 
     def public(self) -> dict:
         """What the Mini App may see before payment: never the content."""
@@ -64,6 +66,8 @@ class Product:
             "option": self.option,
             "ask": self.ask,
             "flexible": self.flexible,
+            "lessons": len(self.lessons),
+            "drip_days": self.drip_days,
         }
 
 def _optional_text(value):
@@ -117,6 +121,46 @@ def _channel_id(value):
     return value
 
 
+def _lessons(value):
+    """[{"title": ..., "content": ...}], a JSON string of that, or text where '# Başlık' lines start lessons."""
+    if value in (None, "", []):
+        return ()
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                value = json.loads(text)
+            except ValueError:
+                return value
+        else:
+            return parse_lesson_text(text)
+    if isinstance(value, (list, tuple)):
+        out = []
+        for entry in value:
+            if isinstance(entry, dict):
+                out.append((str(entry.get("title") or "").strip(), str(entry.get("content") or "").strip()))
+            elif isinstance(entry, (list, tuple)) and len(entry) == 2:
+                out.append((str(entry[0]).strip(), str(entry[1]).strip()))
+            else:
+                return value
+        return tuple(out)
+    return value
+
+
+def parse_lesson_text(text: str) -> tuple[tuple[str, str], ...]:
+    lessons, title, body = [], None, []
+    for line in text.splitlines():
+        if line.startswith("# "):
+            if title is not None:
+                lessons.append((title, "\n".join(body).strip()))
+            title, body = line[2:].strip(), []
+        elif title is not None:
+            body.append(line)
+    if title is not None:
+        lessons.append((title, "\n".join(body).strip()))
+    return tuple(lessons) if lessons else (("Ders 1", text.strip()),)
+
+
 def validate_product(item: dict) -> Product:
     """Build a Product from a JSON object, or raise ConfigError with a message for the seller."""
     if not isinstance(item, dict):
@@ -143,6 +187,8 @@ def validate_product(item: dict) -> Product:
         option=_optional_text(item.get("option")),
         ask=_optional_text(item.get("ask")),
         flexible=item.get("flexible") in (True, 1, "1", "true", "on"),
+        lessons=_lessons(item.get("lessons")),
+        drip_days=_optional_int(item.get("drip_days")),
     )
     if not isinstance(product.id, str) or not PRODUCT_ID.match(product.id):
         raise ConfigError(f"Geçersiz ürün id: {product.id!r} (a-z, 0-9, _ ve -; en fazla 32)")
@@ -198,6 +244,20 @@ def validate_product(item: dict) -> Product:
             raise ConfigError(f"{product.id}: seçenek adı için grup da yaz (ör. grup 'Kurs', seçenek '30 gün')")
     if product.group is not None and product.option is None:
         raise ConfigError(f"{product.id}: grupta her ürünün bir seçenek adı olmalı (ör. '7 gün')")
+    if not isinstance(product.lessons, tuple):
+        raise ConfigError(f"{product.id}: dersler [{{\"title\": ..., \"content\": ...}}] listesi olmalı")
+    if len(product.lessons) > 100:
+        raise ConfigError(f"{product.id}: en fazla 100 ders olabilir")
+    for number, (title, content) in enumerate(product.lessons, 1):
+        if not title or len(title) > 80:
+            raise ConfigError(f"{product.id}: {number}. dersin başlığı 1–80 karakter olmalı")
+        if not content or len(content) > 3500:
+            raise ConfigError(f"{product.id}: {number}. dersin içeriği 1–3500 karakter olmalı")
+    if product.drip_days is not None:
+        if not isinstance(product.drip_days, int) or isinstance(product.drip_days, bool) or not 1 <= product.drip_days <= 30:
+            raise ConfigError(f"{product.id}: ders aralığı 1–30 gün olmalı")
+        if len(product.lessons) < 2:
+            raise ConfigError(f"{product.id}: gün gün açılması için en az 2 ders ekle")
     if product.ask is not None and (not isinstance(product.ask, str) or len(product.ask) > 80):
         raise ConfigError(f"{product.id}: alıcıya sorulacak soru en fazla 80 karakter olmalı")
     if product.flexible and product.kind == "subscription":

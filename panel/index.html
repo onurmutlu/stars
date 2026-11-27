@@ -150,6 +150,17 @@
         <button class="btn wide ghost" id="send-report" style="margin-top:8px">📊 CSV raporu bota gönder</button>
       </article>
 
+      <div class="section-head">
+        <h2>Yardımcılar</h2>
+      </div>
+      <article class="card form">
+        <p class="muted small">Satış bildirimleri ve bot komutları (/admin, /duyuru, /kod…) yardımcılarına da gelir. Panel sende kalır.
+          Yardımcın önce botunu açıp /start yazmalı. En fazla 5 kişi.</p>
+        <div class="row gap"><input id="helper-user" placeholder="@kullaniciadi" autocomplete="off" spellcheck="false">
+          <button class="btn" id="helper-add">Ekle</button></div>
+        <div id="helpers" class="list"></div>
+      </article>
+
       <h2>Son ödemeler</h2>
       <div id="payments" class="list"></div>
 
@@ -208,6 +219,10 @@
           <label>Bu seçeneğin adı
             <input id="p-option" maxlength="20" placeholder="ör. 30 gün"></label>
         </div>
+        <label>Dersler <span class="muted">(kurs modu, isteğe bağlı: her ders "# Başlık" satırıyla başlar)</span>
+          <textarea id="p-lessons" rows="6" maxlength="60000" placeholder="# Giriş&#10;Bu derste neler var…&#10;&#10;# Kurulum&#10;Adım adım…"></textarea></label>
+        <label>Ders aralığı (gün) <span class="muted">(boş = hepsi hemen açılır; 1 = her gün bir yeni ders, bot gönderir)</span>
+          <input id="p-drip" type="number" min="1" max="30" inputmode="numeric" placeholder="hepsi hemen"></label>
         <label id="p-includes-wrap">Paket içeriği <span class="muted">(isteğe bağlı: tek seferlik ürün kimlikleri, virgülle; ör. rehber,sablon)</span>
           <input id="p-includes" maxlength="400" placeholder="rehber,sablon" autocomplete="off" spellcheck="false"></label>
         <label>Stok <span class="muted">(boş = sınırsız; ör. ilk 50 kişi)</span>

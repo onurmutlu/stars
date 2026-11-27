@@ -268,6 +268,36 @@ def test_cart_discount_webhook_and_segmented_broadcast_in_panel(hub_client):
                            headers=panel()).json()["queued"] == 1
 
 
+def test_helpers_get_admin_rights_but_not_the_panel(hub_client):
+    shop = ready_shop(hub_client)
+    url = f"/panel/api/shops/{shop['id']}"
+    HELPER = 5005
+    assert hub_client.post(f"{url}/helpers", json={"user": "@yardimci"}, headers=panel()).status_code == 400
+    hub_client.hub.store_for(shop["id"]).touch_contact({"id": HELPER, "username": "Yardimci", "first_name": "Ece"})
+    helpers = hub_client.post(f"{url}/helpers", json={"user": "@yardimci"}, headers=panel()).json()
+    assert helpers[0]["user_id"] == HELPER and helpers[0]["name"] == "Ece"
+    tenant = hub_client.hub.registry.tenant(shop["id"])
+    assert HELPER in hub_client.hub.registry.shop_settings(tenant).admin_ids
+    assert hub_client.get(f"{url}/helpers", headers=panel(HELPER)).status_code == 404   # panel stays the owner's
+    assert hub_client.get(url, headers=panel()).json()["helpers"][0]["user_id"] == HELPER
+    assert hub_client.delete(f"{url}/helpers/{HELPER}", headers=panel()).json() == []
+    assert HELPER not in hub_client.hub.registry.shop_settings(tenant).admin_ids
+
+
+def test_panel_course_lessons_and_share(hub_client):
+    shop = ready_shop(hub_client)
+    url = f"/panel/api/shops/{shop['id']}"
+    r = hub_client.post(f"{url}/products", headers=panel(), json={
+        "id": "kurs", "title": "Kurs", "description": "d", "stars": 30, "content": "c",
+        "lessons": "# Giriş\nmerhaba\n# Kurulum\nadımlar", "drip_days": 1})
+    assert r.status_code == 200, r.text
+    product = [p for p in r.json()["products"] if p["id"] == "kurs"][0]
+    assert product["lessons"] == [{"title": "Giriş", "content": "merhaba"}, {"title": "Kurulum", "content": "adımlar"}]
+    assert product["drip_days"] == 1
+    sent = hub_client.post(f"{url}/products/kurs/share", json={}, headers=panel()).json()
+    assert sent == {"sent": True, "to": "owner"}
+
+
 def test_owner_isolation_in_panel(hub_client):
     shop = ready_shop(hub_client)
     url = f"/panel/api/shops/{shop['id']}"

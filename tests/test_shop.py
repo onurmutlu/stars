@@ -1041,3 +1041,67 @@ def test_sale_webhook_gets_json_and_never_breaks_a_payment(api, store):
         assert posted[0][0] == "https://hooks.example.com/x"
         assert posted[0][1]["event"] == "sale" and posted[0][1]["stars"] == 50 and posted[0][1]["product"] == "guide"
         assert store.paid_orders(BUYER)                                # the failing hook did not lose the sale
+
+
+# ------------------------------------------------------------------ courses, share card, alerts
+def course_products(drip=None):
+    from app.config import Product
+    lessons = (("Giriş", "Hoş geldin"), ("Kurulum", "Adım adım"), ("İlk satış", "Paylaş"))
+    return {"kurs": Product("kurs", "Kurs", "d", 30, "Kursa hoş geldin", lessons=lessons, drip_days=drip, stock=12)}
+
+
+def test_course_without_drip_sends_all_lessons_and_shows_them(api, store):
+    with shop_with(api, store, course_products()) as client:
+        hook(client, paid(order(client, "kurs"), amount=30, update_id=130))
+        texts = [m["text"] for m in api.of("sendMessage") if m["chat_id"] == BUYER]
+        assert any(t.startswith("📚 Ders 3/3: İlk satış") for t in texts)
+        item = client.get("/api/purchases", headers=headers()).json()[0]
+        assert [lesson["content"] for lesson in item["lessons"]] == ["Hoş geldin", "Adım adım", "Paylaş"]
+        assert {p["id"]: p for p in client.get("/api/products").json()}["kurs"]["lessons"] == 3
+
+
+def test_drip_course_opens_one_lesson_per_period(api, store):
+    with shop_with(api, store, course_products(drip=2)) as client:
+        hook(client, paid(order(client, "kurs"), amount=30, update_id=131))
+        texts = [m["text"] for m in api.of("sendMessage") if m["chat_id"] == BUYER]
+        assert any("Ders 1/3: Giriş" in t for t in texts) and not any("Ders 2/3" in t for t in texts)
+        item = client.get("/api/purchases", headers=headers()).json()[0]
+        assert item["lessons"][1]["content"] is None and item["lessons"][1]["unlocks_at"] > time.time()
+        shop = client.app.state.shop
+        assert asyncio.run(shop.drip_lessons(time.time() + 86400)) == 0
+        assert asyncio.run(shop.drip_lessons(time.time() + 2 * 86400 + 5)) == 1
+        assert "Ders 2/3: Kurulum" in api.of("sendMessage")[-1]["text"]
+        assert asyncio.run(shop.drip_lessons(time.time() + 2 * 86400 + 6)) == 0
+        assert asyncio.run(shop.drip_lessons(time.time() + 9 * 86400)) == 1   # one per run, no flood
+        assert asyncio.run(shop.drip_lessons(time.time() + 9 * 86400)) == 0
+
+
+def test_lesson_text_format_and_rules(tmp_path):
+    from app.config import ConfigError, parse_lesson_text, validate_product
+    assert parse_lesson_text("# Bir\nA\n\n# İki\nB") == (("Bir", "A"), ("İki", "B"))
+    base = {"id": "k", "title": "K", "description": "d", "stars": 5, "content": "c"}
+    assert validate_product(base | {"lessons": "# Bir\nA\n# İki\nB", "drip_days": 1}).drip_days == 1
+    for bad in (base | {"drip_days": 1, "lessons": "# Tek\nx"}, base | {"lessons": [{"title": "", "content": "x"}]},
+                base | {"lessons": "# A\nx\n# B\ny", "drip_days": 40}):
+        with pytest.raises(ConfigError):
+            validate_product(bad)
+
+
+def test_share_card_and_stock_and_review_alerts(api, store):
+    with shop_with(api, store, course_products(), notify_sales=True) as client:
+        hook(client, text("/paylas kurs", user_id=ADMIN, update_id=132))
+        card = [m for m in api.of("sendMessage") if m["chat_id"] == ADMIN and "<b>Kurs</b>" in m["text"]][-1]
+        button = card["reply_markup"]["inline_keyboard"][0][0]
+        assert button["url"] == "https://t.me/demo_bot?start=p_kurs" and "3 ders" in card["text"] and "Son 12" in card["text"]
+        hook(client, text("/paylas kurs -1001234567", user_id=ADMIN, update_id=133))
+        assert api.of("sendMessage")[-2]["chat_id"] == -1001234567
+        hook(client, text("/paylas kurs", user_id=BUYER, update_id=134))      # not for buyers
+        assert not any(m["chat_id"] == BUYER and "<b>" in m["text"] for m in api.of("sendMessage"))
+        for i in range(2):
+            uid = 4000 + i
+            r = client.post("/api/orders", json={"product_id": "kurs"}, headers=headers(uid))
+            hook(client, paid(r.json()["order_id"], amount=30, user_id=uid, charge=f"s{i}", update_id=135 + i))
+        assert any("10 adet kaldı" in m["text"] for m in api.of("sendMessage") if m["chat_id"] == ADMIN)
+        r = client.post("/api/reviews", json={"product_id": "kurs", "rating": 5, "text": "harika"}, headers=headers(4000))
+        assert r.status_code == 200
+        assert any("Yeni yorum" in m["text"] and "harika" in m["text"] for m in api.of("sendMessage") if m["chat_id"] == ADMIN)

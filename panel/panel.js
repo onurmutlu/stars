@@ -61,6 +61,25 @@
     if (tg && tg.showConfirm) tg.showConfirm(text, resolve); else resolve(window.confirm(text));
   });
 
+  // a small in-page sheet: resolves with the chosen value, or undefined when closed
+  const chooseBox = (title, options) => new Promise((resolve) => {
+    const back = el("div", "sheet-back");
+    const sheet = el("div", "sheet");
+    sheet.append(el("h3", "", title));
+    const close = (value) => { back.remove(); resolve(value); };
+    for (const [value, label] of options) {
+      const button = el("button", "btn wide ghost", label);
+      button.addEventListener("click", () => close(value));
+      sheet.append(button);
+    }
+    const cancel = el("button", "btn wide link", "Vazgeç");
+    cancel.addEventListener("click", () => close(undefined));
+    sheet.append(cancel);
+    back.addEventListener("click", (event) => { if (event.target === back) close(undefined); });
+    back.append(sheet);
+    document.body.append(back);
+  });
+
   function show(view) {
     for (const name of ["home", "connect", "shop", "product"]) $(`view-${name}`).hidden = name !== view;
     window.scrollTo(0, 0);
@@ -178,6 +197,7 @@
     loadCustomers().catch((error) => toast(error.message));
     loadPromos().catch(() => {});
     $("bc-segment").replaceChildren();
+    renderHelpers();
     loadBroadcast().catch(() => {});
     loadSources().catch(() => {});
     loadSales().catch(() => {});
@@ -455,7 +475,7 @@
     foot.append(el("span", p.over_limit ? "badge off" : "badge",
       p.over_limit ? "Plan sınırı dışında, satılmıyor" : kindText + (p.file ? " · 📎" : "") + (p.channel_id ? " · 📣" : "") +
       (p.reviews ? ` · ★${p.rating} (${p.reviews})` : "") + (p.waiting ? ` · 🔔 ${p.waiting} bekliyor` : "") +
-      (p.flexible ? " · istediğin kadar" : "") + (p.ask ? " · ❓" : "") + (p.group ? ` · ${p.group}: ${p.option}` : "") + (p.photo_uploaded ? " · 🖼" : "") + (p.upsell ? " · ✨ öneri" : "") + (p.includes ? " · 🧺 paket" : "") + (p.stock ? ` · stok ${p.stock}` : "") + (p.sale_until ? " · ⏰" : "")));
+      ((p.lessons || []).length ? ` · 📚 ${p.lessons.length} ders` : "") + (p.flexible ? " · istediğin kadar" : "") + (p.ask ? " · ❓" : "") + (p.group ? ` · ${p.group}: ${p.option}` : "") + (p.photo_uploaded ? " · 🖼" : "") + (p.upsell ? " · ✨ öneri" : "") + (p.includes ? " · 🧺 paket" : "") + (p.stock ? ` · stok ${p.stock}` : "") + (p.sale_until ? " · ⏰" : "")));
     const actions = el("div", "actions");
     const edit = el("button", "btn small ghost", "Düzenle");
     edit.addEventListener("click", () => openProduct(p));
@@ -465,7 +485,19 @@
       shop = { ...shop, ...(await api(`/panel/api/shops/${shop.id}/products/${p.id}`, { method: "DELETE" })) };
       renderShop();
     }));
-    actions.append(edit, remove);
+    const share = el("button", "btn small ghost", "📣 Paylaş");
+    share.addEventListener("click", () => guarded(share, async () => {
+      const channels = (shop.channels || []).filter((c) => c.type === "channel" || c.type === "supergroup" || c.type === "group");
+      let channel = null;
+      if (channels.length) {
+        const pick = await chooseBox("Kart nereye gönderilsin?", [["", "Bana (ileteceğim)"], ...channels.map((c) => [String(c.id), c.title])]);
+        if (pick === undefined) return;
+        channel = pick || null;
+      }
+      await api(`/panel/api/shops/${shop.id}/products/${p.id}/share`, json("POST", { channel }));
+      toast(channel ? "📣 Kart kanala gönderildi." : `Kart @${shop.username} sohbetine geldi; kanalına ilet.`);
+    }));
+    actions.append(edit, share, remove);
     foot.append(actions);
     card.append(foot);
     return card;
@@ -529,6 +561,31 @@
     renderShop();
   }
 
+  function renderHelpers() {
+    const helpers = shop.helpers || [];
+    $("helpers").replaceChildren(...(helpers.length ? helpers.map((h) => {
+      const row = el("div", "row helper");
+      row.append(el("span", "", `${h.name || "Yardımcı"} · ${h.user_id}`));
+      const remove = el("button", "btn small ghost", "Çıkar");
+      remove.addEventListener("click", () => guarded(remove, async () => {
+        if (!(await confirmBox(`${h.name || h.user_id} yardımcılıktan çıkarılsın mı?`))) return;
+        shop.helpers = await api(`/panel/api/shops/${shop.id}/helpers/${h.user_id}`, { method: "DELETE" });
+        renderHelpers();
+      }));
+      row.append(remove);
+      return row;
+    }) : [el("p", "muted small", "Henüz yardımcı yok.")]));
+  }
+
+  async function addHelper() {
+    const user = $("helper-user").value.trim();
+    if (!user) return toast("Yardımcının @kullanıcı adını yaz.");
+    shop.helpers = await api(`/panel/api/shops/${shop.id}/helpers`, json("POST", { user }));
+    $("helper-user").value = "";
+    toast("Yardımcı eklendi; bota hoş geldin mesajı gitti.");
+    renderHelpers();
+  }
+
   async function sendReport() {
     await api(`/panel/api/shops/${shop.id}/report`, json("POST", {}));
     toast(`Satış ve müşteri dosyaları @${shop.username} sohbetine gönderildi.`);
@@ -556,6 +613,9 @@
     $("p-photo-state").textContent = p && p.photo_uploaded ? "✓ Yüklenmiş bir fotoğraf var." : "";
     $("p-group").value = p && p.group ? p.group : "";
     $("p-ask").value = p && p.ask ? p.ask : "";
+    $("p-lessons").value = p && p.lessons && p.lessons.length
+      ? p.lessons.map((l) => `# ${l.title}\n${l.content}`).join("\n\n") : "";
+    $("p-drip").value = p && p.drip_days ? String(p.drip_days) : "";
     $("p-flexible").checked = Boolean(p && p.flexible);
     $("p-option").value = p && p.option ? p.option : "";
     $("p-group").setAttribute("list", "p-groups");
@@ -611,6 +671,8 @@
       compare_at: $("p-compare").value.trim() || null,
       group: $("p-group").value.trim() || null,
       ask: $("p-ask").value.trim() || null,
+      lessons: $("p-lessons").value.trim() || null,
+      drip_days: $("p-lessons").value.trim() ? ($("p-drip").value.trim() || null) : null,
       flexible: $("p-kind").value !== "subscription" && $("p-flexible").checked,
       option: $("p-group").value.trim() ? ($("p-option").value.trim() || null) : null,
       upsell: $("p-upsell").value || null,
@@ -639,6 +701,7 @@
     $("connect").addEventListener("click", () => guarded($("connect"), connect));
     $("sales").addEventListener("click", () => guarded($("sales"), toggleSales));
     $("save-settings").addEventListener("click", () => guarded($("save-settings"), saveSettings));
+    $("helper-add").addEventListener("click", () => guarded($("helper-add"), addHelper));
     $("send-report").addEventListener("click", () => guarded($("send-report"), sendReport));
     $("add-product").addEventListener("click", () => openProduct(null));
     $("refresh-customers").addEventListener("click", () => guarded($("refresh-customers"), loadCustomers));

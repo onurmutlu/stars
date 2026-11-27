@@ -24,7 +24,7 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from .config import ConfigError, Product, Settings, _bool, check_bundles, validate_product
+from .config import _lessons, ConfigError, Product, Settings, _bool, check_bundles, validate_product
 
 TOKEN_RE = re.compile(r"^\d{5,16}:[A-Za-z0-9_-]{30,64}$")
 STATUSES = ("active", "suspended", "deleted")
@@ -59,6 +59,10 @@ CREATE TABLE IF NOT EXISTS tenants(
     created REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS tenants_owner ON tenants(owner);
+-- helpers: get sale notifications and the bot's admin commands; the panel stays the owner's
+CREATE TABLE IF NOT EXISTS tenant_admins(
+    tenant_id TEXT NOT NULL, user_id INTEGER NOT NULL, name TEXT, added REAL NOT NULL,
+    PRIMARY KEY(tenant_id, user_id));
 CREATE TABLE IF NOT EXISTS products(
     tenant TEXT NOT NULL REFERENCES tenants(id),
     id TEXT NOT NULL,
@@ -82,6 +86,8 @@ CREATE TABLE IF NOT EXISTS products(
     option TEXT,
     ask TEXT,
     flexible INTEGER NOT NULL DEFAULT 0,
+    lessons TEXT,
+    drip_days INTEGER,
     position INTEGER NOT NULL DEFAULT 0,
     archived INTEGER NOT NULL DEFAULT 0,
     updated REAL NOT NULL,
@@ -195,7 +201,8 @@ class Registry:
                              ("access_days", "INTEGER"), ("includes", "TEXT"),
                              ("stock", "INTEGER"), ("sale_until", "REAL"), ("compare_at", "INTEGER"),
                              ("upsell", "TEXT"), ("upsell_percent", "INTEGER"), ("grp", "TEXT"), ("option", "TEXT"),
-                             ("ask", "TEXT"), ("flexible", "INTEGER NOT NULL DEFAULT 0")):
+                             ("ask", "TEXT"), ("flexible", "INTEGER NOT NULL DEFAULT 0"),
+                             ("lessons", "TEXT"), ("drip_days", "INTEGER")):
             if column not in columns:  # databases created before these fields
                 self.db.execute(f"ALTER TABLE products ADD COLUMN {column} {kind}")
         tenant_columns = {row[1] for row in self.db.execute("PRAGMA table_info(tenants)")}
@@ -236,6 +243,22 @@ class Registry:
 
     def tenant(self, tenant_id: str):
         return self.db.execute("SELECT * FROM tenants WHERE id=?", (tenant_id,)).fetchone()
+
+    def helpers(self, tenant_id: str) -> list[dict]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT user_id, name, added FROM tenant_admins WHERE tenant_id=? ORDER BY added", (tenant_id,))]
+
+    def add_helper(self, tenant_id: str, user_id: int, name: str | None) -> None:
+        if len(self.helpers(tenant_id)) >= 5:
+            raise ConfigError("En fazla 5 yardımcı eklenebilir.")
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO tenant_admins VALUES(?,?,?,?)",
+                            (tenant_id, user_id, (name or "")[:64] or None, time.time()))
+
+    def remove_helper(self, tenant_id: str, user_id: int) -> bool:
+        with self.db:
+            return self.db.execute("DELETE FROM tenant_admins WHERE tenant_id=? AND user_id=?",
+                                   (tenant_id, user_id)).rowcount > 0
 
     def by_slug(self, slug: str):
         return self.db.execute("SELECT * FROM tenants WHERE username=? AND status!='deleted'",
@@ -351,8 +374,8 @@ class Registry:
         with self.db:
             self.db.execute(
                 "INSERT INTO products(tenant,id,title,description,stars,content,kind,photo_url,category,badge,channel_id,"
-                "access_days,includes,stock,sale_until,compare_at,upsell,upsell_percent,grp,option,ask,flexible,position,archived,updated) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?) "
+                "access_days,includes,stock,sale_until,compare_at,upsell,upsell_percent,grp,option,ask,flexible,lessons,drip_days,position,archived,updated) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?) "
                 "ON CONFLICT(tenant,id) DO UPDATE SET "
                 "title=excluded.title, description=excluded.description, stars=excluded.stars, "
                 "content=excluded.content, kind=excluded.kind, photo_url=excluded.photo_url, "
@@ -360,13 +383,16 @@ class Registry:
                 "access_days=excluded.access_days, includes=excluded.includes, stock=excluded.stock, "
                 "sale_until=excluded.sale_until, compare_at=excluded.compare_at, upsell=excluded.upsell, "
                 "upsell_percent=excluded.upsell_percent, grp=excluded.grp, option=excluded.option, "
-                "ask=excluded.ask, flexible=excluded.flexible, archived=0, "
+                "ask=excluded.ask, flexible=excluded.flexible, lessons=excluded.lessons, drip_days=excluded.drip_days, "
+                "archived=0, "
                 "updated=excluded.updated, position=COALESCE(?, products.position)",
                 (tenant_id, product.id, product.title, product.description, product.stars, product.content,
                  product.kind, product.photo_url, product.category, product.badge, product.channel_id,
                  product.access_days, ",".join(product.includes) or None, product.stock, product.sale_until,
                  product.compare_at, product.upsell, product.upsell_percent, product.group, product.option, product.ask,
-                 int(product.flexible), position or 0, time.time(), position),
+                 int(product.flexible),
+                 json.dumps([{"title": t, "content": c} for t, c in product.lessons], ensure_ascii=False)
+                 if product.lessons else None, product.drip_days, position or 0, time.time(), position),
             )
         return product
 
@@ -384,7 +410,8 @@ class Registry:
                                  r["kind"], r["photo_url"], r["category"], r["badge"], r["channel_id"],
                                  r["access_days"], tuple(filter(None, (r["includes"] or "").split(","))),
                                  r["stock"], r["sale_until"], r["compare_at"], r["upsell"], r["upsell_percent"],
-                                 r["grp"], r["option"], r["ask"], bool(r["flexible"]))
+                                 r["grp"], r["option"], r["ask"], bool(r["flexible"]),
+                                 _lessons(r["lessons"]), r["drip_days"])
                 for r in rows}
 
     # runtime settings ------------------------------------------------------------
@@ -401,7 +428,7 @@ class Registry:
             shop_name=tenant["shop_name"],
             sales_enabled=sales,
             db_path=str(self.store_path(tenant["id"])),
-            admin_ids=frozenset({tenant["owner"]}),
+            admin_ids=frozenset({tenant["owner"], *(h["user_id"] for h in self.helpers(tenant["id"]))}),
             init_data_max_age=self.hub.init_data_max_age,
             bot_username=tenant["username"],
             admin_url=f"https://t.me/{self.hub.bot_username}?start=panel" if self.hub.bot_username else "",

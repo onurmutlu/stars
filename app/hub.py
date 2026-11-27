@@ -66,7 +66,7 @@ HUB_COMMANDS = [
 FORWARD_MODE_SHOP_COMMANDS = {"/magaza", "/shop", "/orders", "/paysupport", "/terms", "/durdur", "/baslat", "/davet"}
 SHOP_START_PREFIXES = ("p_", "kod_", "ref_", "gift_")
 # owner commands a forwarded bot still sends to the shop
-OWNER_SHOP_COMMANDS = {"/foto", "/rapor", "/yorumlar", "/kaynaklar", "/issues", "/dosya", "/musteriler", "/admin", "/yonetim", "/kod", "/duyuru", "/duyuru_onay",
+OWNER_SHOP_COMMANDS = {"/paylas", "/foto", "/rapor", "/yorumlar", "/kaynaklar", "/issues", "/dosya", "/musteriler", "/admin", "/yonetim", "/kod", "/duyuru", "/duyuru_onay",
                        "/duyuru_iptal"}
 PRO_ID = "pro"
 
@@ -238,7 +238,8 @@ class Hub:
             return True
         if command == "/start" and argument.lower().startswith(SHOP_START_PREFIXES):
             return True  # shop links: product, campaign, invite, gift
-        if (message.get("from") or {}).get("id") == tenant["owner"]:
+        sender = (message.get("from") or {}).get("id")
+        if sender == tenant["owner"] or sender in {h["user_id"] for h in self.registry.helpers(tenant["id"])}:
             return command in OWNER_SHOP_COMMANDS or (command == "/refund" and store.payment(argument) is not None)
         return False
 
@@ -404,6 +405,14 @@ class ShopPatch(BaseModel):
     cart_discount: int | None = Field(None, ge=0, le=90)
     sale_webhook: str | None = Field(None, max_length=512)
     forward_secret: str | None = Field(None, max_length=256)
+
+
+class HelperRequest(BaseModel):
+    user: str = Field(min_length=2, max_length=40)  # @username of someone who started the shop bot, or a numeric id
+
+
+class ShareRequest(BaseModel):
+    channel: str | None = Field(None, max_length=64)
 
 
 class HideRequest(BaseModel):
@@ -589,7 +598,7 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
     @app.post("/s/{slug}/api/reviews")
     async def shop_add_review(slug: str, body: ReviewRequest, x_telegram_init_data: str | None = Header(None)):
         tenant = tenant_by_slug(slug)
-        return hub.shop(tenant).add_review(buyer(tenant, x_telegram_init_data), body.product_id, body.rating, body.text)
+        return await hub.shop(tenant).add_review(buyer(tenant, x_telegram_init_data), body.product_id, body.rating, body.text)
 
     @app.post("/s/{slug}/api/waitlist")
     async def shop_waitlist(slug: str, body: WaitRequest, x_telegram_init_data: str | None = Header(None)):
@@ -658,13 +667,15 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         waiting, ratings, photos = store.waitlist_counts(), store.ratings(), store.product_photos()
         for index, product in enumerate(products):
             product["group"] = product.pop("grp", None)
+            product["lessons"] = json.loads(product["lessons"]) if product.get("lessons") else []
             product["photo_uploaded"] = product["id"] in photos
             product["waiting"] = waiting.get(product["id"], 0)
             product["rating"], product["reviews"] = ratings.get(product["id"], (None, 0))
             product["over_limit"] = index >= limit
             product["file"] = files.get(product["id"], {}).get("name") or files.get(product["id"], {}).get("kind")
             product.pop("tenant", None)
-        return public_tenant(tenant, settings) | {"products": products, "channels": channels}
+        return public_tenant(tenant, settings) | {"products": products, "channels": channels,
+                                                  "helpers": registry.helpers(tenant["id"])}
 
     @app.get("/panel")
     @app.get("/panel/")
@@ -763,6 +774,56 @@ def create_hub_app(settings: HubSettings | None = None, registry: Registry | Non
         if not hub.store_for(tenant["id"]).set_note(user, body.note.strip()):
             raise ShopError("Müşteri bulunamadı.", 404)
         return {"ok": True}
+
+    @app.get("/panel/api/shops/{tenant_id}/helpers")
+    async def panel_helpers(tenant_id: str, x_telegram_init_data: str | None = Header(None)):
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        return registry.helpers(tenant["id"])
+
+    @app.post("/panel/api/shops/{tenant_id}/helpers")
+    async def panel_add_helper(tenant_id: str, body: HelperRequest, x_telegram_init_data: str | None = Header(None)):
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        store = hub.store_for(tenant["id"])
+        wanted = body.user.strip().lstrip("@")
+        contact = None
+        if wanted.isdigit():
+            contact = store.contact(int(wanted))
+        else:
+            contact = store.db.execute("SELECT * FROM contacts WHERE lower(username)=?", (wanted.lower(),)).fetchone()
+        if not contact:
+            raise ShopError(f"Önce yardımcın @{tenant['username']} botunu açıp /start yazmalı; sonra tekrar ekle.")
+        if contact["user"] == tenant["owner"]:
+            raise ShopError("Mağaza sahibi zaten yönetici.")
+        try:
+            registry.add_helper(tenant["id"], contact["user"], contact["name"] or contact["username"])
+        except ConfigError as exc:
+            raise ShopError(str(exc)) from None
+        with contextlib.suppress(Exception):
+            await hub.shop(registry.tenant(tenant["id"])).api(
+                "sendMessage", chat_id=contact["user"],
+                text=f"👋 {tenant['shop_name']} mağazasına yardımcı yönetici olarak eklendin. Satış bildirimleri sana da "
+                     "gelecek; komutlar için /admin yaz.")
+        return registry.helpers(tenant["id"])
+
+    @app.delete("/panel/api/shops/{tenant_id}/helpers/{user}")
+    async def panel_remove_helper(tenant_id: str, user: int, x_telegram_init_data: str | None = Header(None)):
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        if not registry.remove_helper(tenant["id"], user):
+            raise ShopError("Bu yardımcı bulunamadı.", 404)
+        return registry.helpers(tenant["id"])
+
+    @app.post("/panel/api/shops/{tenant_id}/products/{product_id}/share")
+    async def panel_share(tenant_id: str, product_id: str, body: ShareRequest,
+                          x_telegram_init_data: str | None = Header(None)):
+        tenant = hub.owned_tenant(owner_id(x_telegram_init_data), tenant_id)
+        target = body.channel or tenant["owner"]
+        try:
+            await hub.shop(tenant).share_card(product_id, target)
+        except TelegramError as exc:
+            if body.channel:
+                raise ShopError(f"Kanala gönderilemedi: bot orada yönetici ve mesaj gönderebilir olmalı. ({exc.description})")
+            raise ShopError(f"Gönderilemedi; önce @{tenant['username']} botunu açıp /start yaz. ({exc.description})")
+        return {"sent": True, "to": "channel" if body.channel else "owner"}
 
     @app.get("/panel/api/shops/{tenant_id}/sales")
     async def panel_sales(tenant_id: str, days: int = 30, x_telegram_init_data: str | None = Header(None)):

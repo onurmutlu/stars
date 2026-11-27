@@ -183,7 +183,7 @@ def create_app(settings: Settings | None = None, products: dict[str, Product] | 
 
     @app.post("/api/reviews")
     async def add_review(body: ReviewRequest, x_telegram_init_data: str | None = Header(None)):
-        return shop.add_review(user_id(x_telegram_init_data), body.product_id, body.rating, body.text)
+        return await shop.add_review(user_id(x_telegram_init_data), body.product_id, body.rating, body.text)
 
     @app.post("/api/waitlist")
     async def waitlist(body: WaitRequest, x_telegram_init_data: str | None = Header(None)):

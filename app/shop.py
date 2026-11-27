@@ -55,6 +55,10 @@ def _attached_file(message: dict) -> tuple[str, str, str | None] | None:
     return None
 
 
+def _html(text: str) -> str:
+    return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _quote(text: str) -> str:
     from urllib.parse import quote
     return quote(text, safe="")
@@ -215,11 +219,60 @@ class StarsShop:
             if access and access["invite"] and access["removed"] is None:
                 view["content"] += f"\n\n👉 Katılma linkin (tek kullanımlık): {access['invite']}"
             view["access_until"] = self.store.access_until(order)
+            lessons = self.lesson_view(order)
+            if lessons is not None:
+                view["lessons"] = lessons
         elif order["paid"]:
             view["status"] = "expired" if self.store.live_payments(order["id"]) else "refunded"
         else:
             view["status"] = "pending"
         return view
+
+    # ------------------------------------------------------------------ course mode
+    def unlocked_lessons(self, order, now: float | None = None) -> int:
+        """How many lessons of this order are open now (all of them without drip)."""
+        product = self.products.get(order["product"])
+        if not product or not product.lessons:
+            return 0
+        if not product.drip_days:
+            return len(product.lessons)
+        start = self.store.first_payment_time(order["id"]) or time.time()
+        now = time.time() if now is None else now
+        return min(len(product.lessons), 1 + int((now - start) // (product.drip_days * 86400)))
+
+    def lesson_view(self, order) -> list[dict] | None:
+        product = self.products.get(order["product"])
+        if not product or not product.lessons:
+            return None
+        open_count = self.unlocked_lessons(order)
+        start = self.store.first_payment_time(order["id"]) or time.time()
+        step = (product.drip_days or 0) * 86400
+        return [{"title": title, "content": content if i < open_count else None,
+                 "unlocks_at": None if i < open_count else int(start + i * step)}
+                for i, (title, content) in enumerate(product.lessons)]
+
+    async def drip_lessons(self, now: float | None = None) -> int:
+        """Send each newly opened lesson to its buyer (one per order per run, so a long pause does not flood)."""
+        courses = [p.id for p in self.products.values() if p.lessons and p.drip_days]
+        sent = 0
+        for order in self.store.course_orders(courses):
+            if not self.store.has_access(order, now):
+                continue
+            product = self.products[order["product"]]
+            next_index = self.store.lessons_sent(order["id"]) + 1
+            if next_index >= self.unlocked_lessons(order, now):
+                continue
+            title, content = product.lessons[next_index]
+            text = f"📚 {product.title} · Ders {next_index + 1}/{len(product.lessons)}: {title}\n\n{content}"
+            try:
+                await self.api("sendMessage", chat_id=order["user"], text=text[:4096], protect_content=True)
+            except TelegramError as exc:
+                if exc.code == 403:
+                    self.store.set_lessons_sent(order["id"], len(product.lessons))  # blocked: stop trying
+                continue
+            self.store.set_lessons_sent(order["id"], next_index)
+            sent += 1
+        return sent
 
     def _owns(self, user: int, product_id: str) -> bool:
         """An unrefunded purchase or active subscription for this product. Timed access in its last
@@ -251,8 +304,25 @@ class StarsShop:
             text += f"\n\n👉 Katılma linkin (sadece senin için, tek kullanımlık):\n{invite}"
         await self.api("sendMessage", chat_id=order["user"],
                        text=text if len(text) <= 4096 else order["content"], protect_content=True)
+        product = self.products.get(order["product"])
         with self.store.db:
             self.store.db.execute("UPDATE orders SET delivered=1 WHERE id=?", (order["id"],))
+        product = self.products.get(order["product"])
+        if product and product.lessons:
+            # lessons go after the delivery is recorded: a failure here must not resend the content
+            first = 1 if product.drip_days else min(len(product.lessons), 10)
+            try:
+                for index in range(first):
+                    title, content = product.lessons[index]
+                    await self.api("sendMessage", chat_id=order["user"], protect_content=True,
+                                   text=f"📚 Ders {index + 1}/{len(product.lessons)}: {title}\n\n{content}"[:4096])
+                    self.store.set_lessons_sent(order["id"], index)
+                note = (f"Yeni ders her {product.drip_days} günde bir bu sohbete gelir; hepsi Mini App'te "
+                        "'Satın aldıklarım'da." if product.drip_days else
+                        "Tüm dersler Mini App'te 'Satın aldıklarım'da da duruyor.")
+                await self.api("sendMessage", chat_id=order["user"], text=note)
+            except TelegramError as exc:
+                log.info("Ders mesajı gönderilemedi: %s", exc.description)
 
     async def _invite(self, order) -> str:
         """A one-person invite to the product's channel. The bot must be an admin there."""
@@ -410,7 +480,7 @@ class StarsShop:
     async def tick(self, now: float | None = None) -> None:
         """Background work, once a minute: deliveries, channel removals, daily summary."""
         for job in (self.redeliver, self.sweep_channels, self.daily_summary, self.remind_carts, self.warn_expiring,
-                    self.notify_expired, self.send_broadcasts, self.ask_reviews, self.notify_waitlist):
+                    self.notify_expired, self.send_broadcasts, self.ask_reviews, self.notify_waitlist, self.drip_lessons):
             try:
                 await job(now)
             except Exception as exc:  # noqa: BLE001 - one job must not stop the others
@@ -854,6 +924,12 @@ class StarsShop:
             await self.notify_admins(f"{kind}: {order['title']} · ⭐{order['stars']}\nAlıcı: {_who(sender or {'id': user})}{until}{asked}")
         if not renewal:
             await self._offer_upsell(user, order)
+        product = self.products.get(order["product"])
+        if product and product.stock:
+            left = self.availability(product)[1]
+            if left is not None and left in (0, 1, 3, 5, 10) and left < product.stock:
+                await self.notify_admins(f"📦 Stok uyarısı: '{product.title}' için {left} adet kaldı."
+                                         if left else f"📦 '{product.title}' tükendi. Stoğu artırırsan bekleme listesine haber gider.")
 
     def reports(self) -> dict[str, bytes]:
         """satislar.csv and musteriler.csv, UTF-8 with BOM and ';' so Excel opens Turkish text correctly."""
@@ -886,6 +962,40 @@ class StarsShop:
         for name, body in self.reports().items():
             await self.api("sendDocument", chat_id=chat_id, files={"document": (f"{stamp}-{name}", body)},
                            caption=f"{self.settings.shop_name} · {name.removesuffix('.csv')}")
+
+    # ------------------------------------------------------------------ share card
+    async def share_card(self, product_id: str, chat_id) -> None:
+        """A product card with a buy button, for a channel/group (the bot must be able to post there) or for the
+        admin to forward. Channels do not allow Mini App buttons, so the button opens the bot with p_<id>."""
+        product = self.products.get(product_id)
+        if not product:
+            raise ShopError("Ürün bulunamadı.", 404)
+        if not self.settings.bot_username:
+            raise ShopError("Botun kullanıcı adı bilinmiyor.")
+        rating, reviews = self.store.ratings().get(product.id, (None, 0))
+        lines = [f"<b>{_html(product.title)}</b>", _html(product.description)]
+        price = f"⭐ {product.stars}" + (f"  <s>⭐ {product.compare_at}</s>" if product.compare_at else "")
+        if product.flexible:
+            price = f"⭐ {product.stars}'den başlayan, istediğin kadar"
+        lines.append(price)
+        if reviews:
+            lines.append(f"★ {rating} · {reviews} değerlendirme")
+        if product.lessons:
+            lines.append(f"📚 {len(product.lessons)} ders")
+        left = self.availability(product)[1]
+        if left is not None and left <= 20:
+            lines.append(f"Son {left} adet")
+        button = {"inline_keyboard": [[{"text": f"⭐ {product.stars} ile al" if not product.flexible else "⭐ Satın al",
+                                        "url": f"https://t.me/{self.settings.bot_username}?start=p_{product.id}"}]]}
+        caption = "\n\n".join(lines[:2]) + "\n\n" + "\n".join(lines[2:])
+        photo = self.store.product_photo(product.id)
+        picture = photo["file_id"] if photo else product.photo_url
+        if picture and len(caption) <= 1024:
+            await self.api("sendPhoto", chat_id=chat_id, photo=picture, caption=caption, parse_mode="HTML",
+                           reply_markup=button)
+        else:
+            await self.api("sendMessage", chat_id=chat_id, text=caption[:4096], parse_mode="HTML",
+                           reply_markup=button, disable_web_page_preview=True)
 
     # ------------------------------------------------------------------ sale webhook
     async def _sale_webhook(self, order, charge: str, sender: dict | None, renewal: bool) -> None:
@@ -1007,7 +1117,7 @@ class StarsShop:
                 "can_review": bool(viewer) and self.can_review(viewer, product_id),
                 "mine": {"rating": mine["rating"], "text": mine["text"]} if mine else None}
 
-    def add_review(self, user: int, product_id: str, rating: int, text: str | None) -> dict:
+    async def add_review(self, user: int, product_id: str, rating: int, text: str | None) -> dict:
         if product_id not in self.products and not self.store.paid_orders(user):
             raise ShopError("Ürün bulunamadı.", 404)
         if not self.can_review(user, product_id):
@@ -1019,7 +1129,13 @@ class StarsShop:
         if contact and contact["name"]:
             parts = contact["name"].split()
             name = parts[0] + (f" {parts[1][0]}." if len(parts) > 1 else "")
+        first = self.store.review(product_id, user) is None
         self.store.save_review(product_id, user, rating, text, name)
+        if first:
+            title = self.products[product_id].title if product_id in self.products else product_id
+            body = f": {text.strip()[:200]}" if text and text.strip() else ""
+            await self.notify_admins(f"{'⭐' * rating} Yeni yorum · {title} · {name or user}{body}\n"
+                                     f"Gizlemek için: /yorumlar gizle {product_id} {user}")
         return self.reviews(product_id, user)
 
     async def ask_reviews(self, now: float | None = None) -> int:
@@ -1203,6 +1319,21 @@ class StarsShop:
                          + (f": {r['text'][:80]}" if r["text"] else "") + f"\n   /yorumlar {'goster' if r['hidden'] else 'gizle'} "
                          f"{r['product']} {r['user']}" for r in rows]
                 reply = "Son yorumlar\n" + "\n".join(lines) if rows else "Henüz yorum yok."
+        elif command in ("/paylas", "/share") and user in self.settings.admin_ids:
+            parts = argument.split()
+            if not parts or parts[0].lower() not in self.products:
+                reply = ("Kullanım: /paylas <ürün> — kartı sana gönderir, kanalına iletebilirsin.\n"
+                         "/paylas <ürün> @kanal ya da -100… — doğrudan kanala/gruba atar (bot orada yönetici olmalı).\n"
+                         f"Ürünler: {', '.join(self.products) or 'henüz ürün yok'}")
+            else:
+                target = parts[1] if len(parts) > 1 else user
+                if isinstance(target, str) and target.lstrip("-").isdigit():
+                    target = int(target)
+                try:
+                    await self.share_card(parts[0].lower(), target)
+                    reply = "📣 Kart kanala gönderildi." if len(parts) > 1 else "↑ Bu kartı kanalına ya da grubuna ilet."
+                except TelegramError as exc:
+                    reply = f"Gönderilemedi: bot o kanalda yönetici ve mesaj gönderebilir olmalı. ({exc.description})"
         elif command in ("/kaynaklar", "/sources") and user in self.settings.admin_ids:
             rows = self.store.source_stats()
             reply = "📈 Kaynaklar (kişi · alıcı · ⭐ · dönüşüm)\n" + "\n".join(
@@ -1245,7 +1376,7 @@ class StarsShop:
                 rows.append([{"text": "🔑 Lisans yönetimi", "url": self.settings.buy_url}])
             rows.append([{"text": "🛍 Mağazayı aç", "web_app": {"url": self.settings.webapp_url + "/app"}}])
             await self.api("sendMessage", chat_id=user,
-                           text="Yönetim\nMüşteriler: /musteriler · İade: /refund <charge_id> · Ödeme sorunları: /issues · CSV rapor: /rapor\nKaynaklar: /kaynaklar · Yorumlar: /yorumlar · Ürün görseli: fotoğraf + /foto <ürün>\n"
+                           text="Yönetim\nMüşteriler: /musteriler · İade: /refund <charge_id> · Ödeme sorunları: /issues · CSV rapor: /rapor\nKaynaklar: /kaynaklar · Yorumlar: /yorumlar · Ürün görseli: fotoğraf + /foto <ürün> · Kanala kart: /paylas <ürün>\n"
                                 "Müşteri mesajları buraya gelir; cevaplamak için yanıtla.",
                            reply_markup={"inline_keyboard": rows})
             return

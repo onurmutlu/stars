@@ -169,3 +169,15 @@ main { padding: 14px 16px 96px; }
 .ask-box textarea { width: 100%; box-sizing: border-box; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--hint) 30%, transparent);
   background: var(--bg); color: inherit; padding: 10px; font: inherit; resize: vertical; }
 .amount-row .chip { border: 1px solid color-mix(in srgb, var(--hint) 35%, transparent); }
+
+/* course lessons */
+.lessons { list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 8px; }
+.lesson { border-radius: 12px; background: color-mix(in srgb, var(--hint) 8%, transparent); padding: 10px 12px; }
+.lesson-head { display: flex; gap: 10px; align-items: center; width: 100%; background: none; border: 0; padding: 0;
+  color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.lesson-no { width: 26px; height: 26px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 13px;
+  font-weight: 700; background: var(--btn); color: var(--btn-text); }
+.lesson.locked .lesson-no { background: color-mix(in srgb, var(--hint) 35%, transparent); }
+.lesson.locked b { color: var(--hint); }
+.lesson p { margin: 6px 0 0 36px; font-size: 13px; }
+.lesson-body { margin: 8px 0 0 36px; }

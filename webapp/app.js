@@ -28,6 +28,8 @@
       share_text: "{title} · ⭐ {n}", per_month: "/ 30 gün", admin: "⚙️ Yönetim",
       foot_admin: "Yönetim paneli", foot_license: "Lisans yönetimi", foot_buy: "Sen de mağaza aç",
       from_price: "{n}+", n_options: "{n} seçenek",
+      fact_lessons: "{n} derslik kurs; hepsi hemen açılır.", fact_drip: "{n} derslik kurs; her {d} günde bir yeni ders açılır, bot sana gönderir.",
+      lessons_open: "{a}/{n} ders", lesson_locked: "🔒 {date} tarihinde açılır",
       amount_label: "Tutarı sen seç (en az ⭐{n})", ask_placeholder: "Cevabın", ask_needed: "Önce soruyu cevapla.",
       amount_low: "Tutar en az ⭐{n} olmalı.", flexible_tag: "İstediğin kadar öde",
       bundle_tag: "Paket", fact_bundle: "Pakette: {list}. Ayrı ayrı ⭐ {n}; paketle ⭐ {save} kazanırsın.",
@@ -67,6 +69,8 @@
       share_text: "{title} · ⭐ {n}", per_month: "/ 30 days", admin: "⚙️ Admin",
       foot_admin: "Admin panel", foot_license: "License", foot_buy: "Open your own shop",
       from_price: "from {n}", n_options: "{n} options",
+      fact_lessons: "A course of {n} lessons, all open right away.", fact_drip: "A course of {n} lessons; a new one opens every {d} days.",
+      lessons_open: "{a}/{n} lessons", lesson_locked: "🔒 Opens on {date}",
       amount_label: "Choose the amount (at least ⭐{n})", ask_placeholder: "Your answer", ask_needed: "Please answer the question first.",
       amount_low: "The amount must be at least ⭐{n}.", flexible_tag: "Pay what you want",
       bundle_tag: "Bundle", fact_bundle: "Includes: {list}. Separately ⭐ {n}; you save ⭐ {save}.",
@@ -342,6 +346,8 @@
       : product.access_days ? ["⏳", t("fact_days", { n: product.access_days })] : ["📦", t("fact_once")]];
     const bundle = bundleFact(product);
     if (bundle) facts.push(["🧺", bundle]);
+    if (product.lessons) facts.push(["📚", product.drip_days
+      ? t("fact_drip", { n: product.lessons, d: product.drip_days }) : t("fact_lessons", { n: product.lessons })]);
     if (product.file) facts.push(["📎", t("fact_file")]);
     if (product.left != null && !product.sold_out) facts.push(["📉", t("fact_left", { n: product.left })]);
     if (product.sale_until) facts.push(["⏰", t("fact_ends", { date: formatDate(product.sale_until) })]);
@@ -583,6 +589,10 @@
       }
     } else if (item.status === "paid") {
       row.append(el("span", "badge ok", item.access_until ? `${t("until")} ${formatDate(item.access_until)}` : t("owned")));
+      if (item.lessons) {
+        const open = item.lessons.filter((l) => l.content !== null).length;
+        row.append(el("span", "badge", t("lessons_open", { a: open, n: item.lessons.length })));
+      }
       const open = el("button", "btn", t("open"));
       open.addEventListener("click", () => { returnTo = "library"; openContent(item); });
       row.append(open);
@@ -606,6 +616,25 @@
     $("content-title").textContent = item.title;
     $("content-meta").textContent = item.access_until ? `${t("until")} ${formatDate(item.access_until)}` : "";
     renderContent($("content-body"), item.content || "");
+    const list = $("lesson-list");
+    list.hidden = !item.lessons;
+    list.replaceChildren(...(item.lessons || []).map((lesson, i) => {
+      const li = el("li", lesson.content === null ? "lesson locked" : "lesson");
+      const head = el("button", "lesson-head");
+      head.type = "button";
+      head.append(el("span", "lesson-no", String(i + 1)), el("b", "", lesson.title));
+      li.append(head);
+      if (lesson.content === null) {
+        li.append(el("p", "muted", t("lesson_locked", { date: formatDate(lesson.unlocks_at) })));
+      } else {
+        const body = el("div", "content-body lesson-body");
+        renderContent(body, lesson.content);
+        body.hidden = i !== 0;
+        head.addEventListener("click", () => { body.hidden = !body.hidden; haptic("select"); });
+        li.append(body);
+      }
+      return li;
+    }));
     show("content");
   }
 

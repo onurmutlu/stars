@@ -87,6 +87,8 @@ CREATE TABLE IF NOT EXISTS waitlist(
 -- a product picture sent to the bot (/foto <product>); served by the shop itself
 CREATE TABLE IF NOT EXISTS product_photos(
     product TEXT PRIMARY KEY, file_id TEXT NOT NULL, unique_id TEXT NOT NULL, added REAL NOT NULL);
+-- course mode: the highest lesson index already sent to the buyer by the bot
+CREATE TABLE IF NOT EXISTS lesson_progress(order_id TEXT PRIMARY KEY, sent INTEGER NOT NULL, updated REAL NOT NULL);
 -- the one review request per order, sent a day after the purchase
 CREATE TABLE IF NOT EXISTS review_requests(order_id TEXT PRIMARY KEY, sent REAL NOT NULL);
 -- channels and groups the bot was made admin of (from my_chat_member updates)
@@ -293,6 +295,27 @@ class Store:
     def leave_waitlist(self, product: str, users: list[int]) -> None:
         with self.db:
             self.db.executemany("DELETE FROM waitlist WHERE product=? AND user=?", [(product, u) for u in users])
+
+    # lessons -------------------------------------------------------------------
+    def first_payment_time(self, order_id: str) -> float | None:
+        row = self.db.execute("SELECT MIN(created) FROM payments WHERE order_id=?", (order_id,)).fetchone()
+        return row[0]
+
+    def lessons_sent(self, order_id: str) -> int:
+        row = self.db.execute("SELECT sent FROM lesson_progress WHERE order_id=?", (order_id,)).fetchone()
+        return row[0] if row else -1
+
+    def set_lessons_sent(self, order_id: str, index: int) -> None:
+        with self.db:
+            self.db.execute("INSERT INTO lesson_progress VALUES(?,?,?) ON CONFLICT(order_id) DO UPDATE SET "
+                            "sent=MAX(sent, excluded.sent), updated=excluded.updated", (order_id, index, time.time()))
+
+    def course_orders(self, products: list[str]):
+        if not products:
+            return []
+        marks = ",".join("?" * len(products))
+        return self.db.execute(f"SELECT * FROM orders WHERE paid=1 AND gift=0 AND delivered=1 AND product IN ({marks})",
+                               products).fetchall()
 
     # photos --------------------------------------------------------------------
     def set_product_photo(self, product: str, file_id: str, unique_id: str) -> None:
