@@ -64,6 +64,8 @@ HUB_COMMANDS = [
 ]
 # In forward mode these commands stay with the shop; everything else goes to the bot's own backend.
 FORWARD_MODE_SHOP_COMMANDS = {"/magaza", "/shop", "/orders", "/paysupport", "/terms"}
+# owner commands a forwarded bot still sends to the shop
+OWNER_SHOP_COMMANDS = {"/issues", "/dosya", "/musteriler", "/admin", "/yonetim"}
 PRO_ID = "pro"
 
 ApiFactory = Callable[[str], Callable[..., Awaitable]]
@@ -226,13 +228,14 @@ class Hub:
             return store.order(message["successful_payment"].get("invoice_payload", "")) is not None
         if message.get("refunded_payment"):
             return store.payment(message["refunded_payment"].get("telegram_payment_charge_id", "")) is not None
-        if message.get("chat", {}).get("type") != "private" or not message.get("text"):
+        text = message.get("text") or message.get("caption") or ""
+        if message.get("chat", {}).get("type") != "private" or not text:
             return False
-        command, argument = _command(message["text"])
+        command, argument = _command(text)
         if command in FORWARD_MODE_SHOP_COMMANDS:
             return True
         if (message.get("from") or {}).get("id") == tenant["owner"]:
-            return command == "/issues" or (command == "/refund" and store.payment(argument) is not None)
+            return command in OWNER_SHOP_COMMANDS or (command == "/refund" and store.payment(argument) is not None)
         return False
 
     async def tenant_update(self, tenant, update: dict) -> None:

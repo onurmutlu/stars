@@ -53,6 +53,9 @@ CREATE TABLE IF NOT EXISTS inbox(
     admin INTEGER NOT NULL, admin_message INTEGER NOT NULL, user INTEGER NOT NULL, created REAL NOT NULL,
     PRIMARY KEY(admin, admin_message));
 CREATE TABLE IF NOT EXISTS cart_reminders(order_id TEXT PRIMARY KEY, sent REAL NOT NULL);
+-- a file the bot sends after payment (Telegram file_id of THIS bot; the seller sends it with /dosya <product>)
+CREATE TABLE IF NOT EXISTS product_files(
+    product TEXT PRIMARY KEY, file_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT, added REAL NOT NULL);
 -- channels and groups the bot was made admin of (from my_chat_member updates)
 CREATE TABLE IF NOT EXISTS channels(
     id INTEGER PRIMARY KEY, title TEXT, type TEXT, status TEXT, can_invite INTEGER, can_restrict INTEGER, updated REAL);
@@ -189,6 +192,23 @@ class Store:
 
     def channels(self):
         return self.db.execute("SELECT * FROM channels WHERE status='administrator' ORDER BY updated DESC").fetchall()
+
+    # product files -------------------------------------------------------------------
+    def set_product_file(self, product: str, file_id: str, kind: str, name: str | None) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO product_files VALUES(?,?,?,?,?)",
+                            (product, file_id, kind, (name or None) and name[:200], time.time()))
+
+    def product_file(self, product: str):
+        return self.db.execute("SELECT * FROM product_files WHERE product=?", (product,)).fetchone()
+
+    def remove_product_file(self, product: str) -> bool:
+        with self.db:
+            return self.db.execute("DELETE FROM product_files WHERE product=?", (product,)).rowcount > 0
+
+    def product_files(self) -> dict[str, dict]:
+        return {r["product"]: {"kind": r["kind"], "name": r["name"]}
+                for r in self.db.execute("SELECT * FROM product_files")}
 
     # contacts (CRM) ------------------------------------------------------------------
     def touch_contact(self, user: dict, source: str | None = None, now: float | None = None) -> None:

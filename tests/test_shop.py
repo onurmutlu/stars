@@ -465,3 +465,37 @@ def test_abandoned_cart_gets_one_reminder(client, api, store):
     assert asyncio.run(shop.remind_carts(created + 7200)) == 0     # never twice
     order(client)  # a new unpaid order for the same product: still no second reminder
     assert asyncio.run(shop.remind_carts(time.time() + 3700)) == 0
+
+
+# ------------------------------------------------------------------ file delivery
+def test_admin_attaches_file_and_buyer_receives_it(client, api, store):
+    upload = {"update_id": 30, "message": {"message_id": 7, "chat": {"id": ADMIN, "type": "private"}, "from": {"id": ADMIN},
+              "caption": "/dosya guide", "document": {"file_id": "FILE123", "file_name": "rehber.pdf"}}}
+    hook(client, upload)
+    assert "rehber.pdf" in api.of("sendMessage")[-1]["text"]
+    assert [p for p in client.get("/api/products").json() if p["id"] == "guide"][0]["file"] == "document"
+    order_id = order(client)
+    hook(client, paid(order_id, update_id=31))
+    (doc,) = api.of("sendDocument")
+    assert doc == {"chat_id": BUYER, "document": "FILE123", "protect_content": True, "caption": "Rehber"}
+    assert "Dosyan yukarıda" in api.of("sendMessage")[-1]["text"]
+    assert "bot sohbetine" in client.get(f"/api/orders/{order_id}", headers=headers()).json()["content"]
+    hook(client, text("/dosya guide sil", user_id=ADMIN, update_id=32))
+    assert store.product_file("guide") is None
+
+
+def test_failed_file_send_retries_whole_delivery(client, api, store):
+    store.set_product_file("guide", "F1", "video", None)
+    api.fail["sendVideo"] = 1
+    order_id = order(client)
+    hook(client, paid(order_id, update_id=33))
+    assert not [m for m in api.of("sendMessage") if m["chat_id"] == BUYER and "✅" in m["text"]]
+    asyncio.run(client.app.state.shop.redeliver(time.time() + 400))
+    assert len(api.of("sendVideo")) == 2 and "✅ Rehber" in api.of("sendMessage")[-1]["text"]
+
+
+def test_only_admins_can_attach_files(client, api, store):
+    upload = {"update_id": 34, "message": {"message_id": 8, "chat": {"id": BUYER, "type": "private"}, "from": {"id": BUYER},
+              "caption": "/dosya guide", "document": {"file_id": "X"}}}
+    hook(client, upload)
+    assert store.product_file("guide") is None

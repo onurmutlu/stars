@@ -28,6 +28,22 @@ DELIVERY_RETRY_SECONDS = 300
 MAX_UPDATE_FAILURES = 3
 
 
+# message field -> (send method, its file parameter)
+FILE_METHODS = {"document": ("sendDocument", "document"), "video": ("sendVideo", "video"),
+                "audio": ("sendAudio", "audio"), "photo": ("sendPhoto", "photo"),
+                "animation": ("sendAnimation", "animation"), "voice": ("sendVoice", "voice")}
+
+
+def _attached_file(message: dict) -> tuple[str, str, str | None] | None:
+    for kind in ("document", "video", "audio", "animation", "voice"):
+        item = message.get(kind)
+        if item:
+            return kind, item["file_id"], item.get("file_name")
+    if message.get("photo"):
+        return "photo", message["photo"][-1]["file_id"], None
+    return None
+
+
 def _who(user: dict) -> str:
     name = " ".join(x for x in (user.get("first_name"), user.get("last_name")) if x)
     handle = f"@{user['username']}" if user.get("username") else ""
@@ -48,7 +64,10 @@ class StarsShop:
 
     # ------------------------------------------------------------------ Mini App
     def catalog(self) -> list[dict]:
-        return [p.public() for p in self.products.values()] if self.settings.sales_enabled else []
+        if not self.settings.sales_enabled:
+            return []
+        files = self.store.product_files()
+        return [p.public() | {"file": files.get(p.id, {}).get("kind")} for p in self.products.values()]
 
     async def create_invoice(self, user: int, product_id: str) -> dict:
         if not self.settings.sales_enabled:
@@ -88,6 +107,8 @@ class StarsShop:
         if self.store.has_access(order):
             view["status"] = "paid"
             view["content"] = order["content"]
+            if self.store.product_file(order["product"]):
+                view["content"] += "\n\n📎 Dosyan bot sohbetine gönderildi. Tekrar almak için botta /orders yaz."
             access = self.store.channel_access(order["id"]) if order["channel"] else None
             if access and access["invite"] and access["removed"] is None:
                 view["content"] += f"\n\n👉 Katılma linkin (tek kullanımlık): {access['invite']}"
@@ -106,7 +127,15 @@ class StarsShop:
     async def deliver(self, order) -> None:
         if order["delivered"] or not self.store.has_access(order):
             return
+        attached = self.store.product_file(order["product"])
+        if attached:
+            # the file first: if it fails, nothing was sent and the whole delivery is retried
+            method, field = FILE_METHODS[attached["kind"]]
+            await self.api(method, chat_id=order["user"], protect_content=True, caption=order["title"][:1024],
+                           **{field: attached["file_id"]})
         text = f"✅ {order['title']}\n\n{order['content']}"
+        if attached:
+            text += "\n\n📎 Dosyan yukarıda."
         if order["channel"]:
             invite = await self._invite(order)
             text += f"\n\n👉 Katılma linkin (sadece senin için, tek kullanımlık):\n{invite}"
@@ -281,7 +310,7 @@ class StarsShop:
         sender = message.get("from") or {}
         if message.get("chat", {}).get("type") != "private" or sender.get("is_bot"):
             return
-        text = message.get("text") or ""
+        text = message.get("text") or message.get("caption") or ""
         start_source = text.partition(" ")[2].strip() if text.split("@")[0].startswith("/start") else None
         self.store.touch_contact(sender, start_source)
         if message.get("successful_payment"):
@@ -293,6 +322,8 @@ class StarsShop:
             self.store.mark_refunded(refunded["telegram_payment_charge_id"])
             if first and self.settings.notify_sales:
                 await self.notify_admins(f"↩️ İade: ⭐{refunded.get('total_amount', '?')} · {_who(sender)}")
+        elif sender["id"] in self.settings.admin_ids and text.split("@")[0].split(" ")[0].lower() == "/dosya":
+            await self._attach(sender["id"], text, message)
         elif sender["id"] in self.settings.admin_ids and message.get("reply_to_message"):
             await self._admin_reply(sender["id"], message)
         elif text.startswith("/"):
@@ -301,6 +332,30 @@ class StarsShop:
             await self._customer_message(sender, message)
         elif text:
             await self._command(sender["id"], text)
+
+    async def _attach(self, admin: int, text: str, message: dict) -> None:
+        """/dosya <ürün> as the caption of a file attaches it; /dosya <ürün> sil removes it."""
+        parts = text.split()
+        product = parts[1].lower() if len(parts) > 1 else ""
+        if product not in self.products:
+            ids = ", ".join(self.products) or "henüz ürün yok"
+            reply = ("Kullanım: dosyayı (PDF, video, zip…) bota gönderirken açıklamaya /dosya <ürün-kimliği> yaz.\n"
+                     f"Ürünler: {ids}")
+        elif len(parts) > 2 and parts[2].lower() in ("sil", "kaldir", "kaldır"):
+            reply = "Dosya kaldırıldı." if self.store.remove_product_file(product) else "Bu üründe dosya yoktu."
+        else:
+            found = _attached_file(message)
+            if not found:
+                current = self.store.product_file(product)
+                reply = (f"'{product}' ürününde dosya var: {current['name'] or current['kind']}. Değiştirmek için yeni dosyayı "
+                         f"açıklamasına /dosya {product} yazarak gönder; kaldırmak için /dosya {product} sil."
+                         if current else f"Dosyayı gönderirken açıklamasına /dosya {product} yaz.")
+            else:
+                kind, file_id, name = found
+                self.store.set_product_file(product, file_id, kind, name)
+                reply = (f"📎 {name or kind} '{self.products[product].title}' ürününe eklendi. "
+                         "Satın alan herkese ödemeden hemen sonra gönderilecek (iletilemez/kaydedilemez olarak).")
+        await self.api("sendMessage", chat_id=admin, text=reply)
 
     # ------------------------------------------------------------------ customer inbox
     async def _customer_message(self, sender: dict, message: dict) -> None:
