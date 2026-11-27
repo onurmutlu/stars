@@ -31,3 +31,9 @@ def test_expired_init_data_is_rejected():
 def test_garbage_is_rejected(value):
     with pytest.raises(initdata.InvalidInitData):
         initdata.validate(value, TOKEN)
+
+
+def test_http_client_never_logs_request_urls():
+    import logging
+    import app.telegram  # noqa: F401 - importing sets the levels
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING

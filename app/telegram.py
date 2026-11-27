@@ -1,7 +1,13 @@
 """Minimal Bot API client. Never puts the token in logs or exception text."""
 from __future__ import annotations
 
+import logging
+
 import httpx
+
+# httpx logs every request URL at INFO, and a Bot API URL contains the bot token.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 class TelegramError(Exception):
