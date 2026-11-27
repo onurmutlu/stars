@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS inbox(
     PRIMARY KEY(admin, admin_message));
 CREATE TABLE IF NOT EXISTS cart_reminders(order_id TEXT PRIMARY KEY, sent REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS expiry_notices(order_id TEXT PRIMARY KEY, sent REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS expiry_warnings(order_id TEXT PRIMARY KEY, sent REAL NOT NULL);
 -- announcements to people who talked to the bot; one per day at most, opt-out with /durdur
 CREATE TABLE IF NOT EXISTS broadcasts(
     id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL,
@@ -143,6 +144,32 @@ class Store:
         payments = self.live_payments(order["id"])
         expiries = [p["expires"] for p in payments if p["expires"]]
         return max(expiries) if expiries else None
+
+    def active_until(self, user: int, product: str, now: float | None = None,
+                     exclude: str | None = None) -> float | None:
+        """Latest end of a still-running timed purchase of this product (to stack a renewal on it)."""
+        now = time.time() if now is None else now
+        ends = [self.access_until(o) for o in self.paid_orders(user)
+                if o["product"] == product and o["id"] != exclude and self.has_access(o, now)]
+        ends = [e for e in ends if e]
+        return max(ends) if ends else None
+
+    def has_other_access(self, user: int, *, product: str | None = None, channel: int | None = None,
+                         exclude: str, now: float | None = None) -> bool:
+        """Another order still gives this user the same product or the same channel."""
+        now = time.time() if now is None else now
+        return any(o["id"] != exclude and ((product and o["product"] == product) or (channel and o["channel"] == channel))
+                   and self.has_access(o, now) for o in self.paid_orders(user))
+
+    def expiring_timed_orders(self, now: float, window: float):
+        rows = self.db.execute(
+            "SELECT o.* FROM orders o WHERE o.paid=1 AND o.kind!='subscription' AND o.access_days IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM expiry_warnings w WHERE w.order_id=o.id)").fetchall()
+        return [o for o in rows if self.has_access(o, now) and (self.access_until(o) or 0) - now < window]
+
+    def mark_expiry_warned(self, order_id: str) -> None:
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO expiry_warnings VALUES(?,?)", (order_id, time.time()))
 
     def paid_orders(self, user: int):
         return self.db.execute(

@@ -28,6 +28,7 @@ Api = Callable[..., Awaitable]
 MAX_DELIVERY_ATTEMPTS = 5
 DELIVERY_RETRY_SECONDS = 300
 MAX_UPDATE_FAILURES = 3
+RENEW_WINDOW = 3 * 86400       # timed access can be extended (and is reminded) in its last three days
 BROADCAST_GAP = 86400          # one announcement a day at most: keeps the bot out of spam reports
 BROADCAST_BATCH = 300          # messages per background tick (a tick is ~1 minute)
 BROADCAST_FOOTER = "\n\n— Duyuru almak istemiyorsan /durdur yaz."
@@ -148,8 +149,16 @@ class StarsShop:
         return view
 
     def _owns(self, user: int, product_id: str) -> bool:
-        """An unrefunded one-time purchase or an active subscription for this product."""
-        return any(o["product"] == product_id and self.store.has_access(o) for o in self.store.paid_orders(user))
+        """An unrefunded purchase or active subscription for this product. Timed access in its last
+        days does not count, so the buyer can extend it (the new days are added to the remaining ones)."""
+        now = time.time()
+        for o in self.store.paid_orders(user):
+            if o["product"] != product_id or not self.store.has_access(o, now):
+                continue
+            until = self.store.access_until(o) if o["access_days"] else None
+            if until is None or until - now > RENEW_WINDOW:
+                return True
+        return False
 
     # ------------------------------------------------------------------ delivery
     async def deliver(self, order) -> None:
@@ -260,6 +269,9 @@ class StarsShop:
             order = self.store.order(row["order_id"])
             if order and self.store.has_access(order, now):
                 continue
+            if self.store.has_other_access(row["user"], channel=row["channel"], exclude=row["order_id"], now=now):
+                self.store.mark_removed(row["order_id"])  # renewed: this invite is done, the member stays
+                continue
             try:
                 with contextlib.suppress(TelegramError):  # an unused invite is simply revoked
                     if row["invite"]:
@@ -306,8 +318,8 @@ class StarsShop:
 
     async def tick(self, now: float | None = None) -> None:
         """Background work, once a minute: deliveries, channel removals, daily summary."""
-        for job in (self.redeliver, self.sweep_channels, self.daily_summary, self.remind_carts, self.notify_expired,
-                    self.send_broadcasts):
+        for job in (self.redeliver, self.sweep_channels, self.daily_summary, self.remind_carts, self.warn_expiring,
+                    self.notify_expired, self.send_broadcasts):
             try:
                 await job(now)
             except Exception as exc:  # noqa: BLE001 - one job must not stop the others
@@ -488,7 +500,8 @@ class StarsShop:
         sent = 0
         for order in self.store.expired_timed_orders(now):
             self.store.mark_expiry_noticed(order["id"])
-            if order["channel"]:
+            if order["channel"] or self.store.has_other_access(order["user"], product=order["product"],
+                                                               exclude=order["id"], now=now):
                 continue
             buttons = []
             if order["product"] in self.products:
@@ -560,6 +573,32 @@ class StarsShop:
                                      + (f", {done['failed']} kişiye ulaşmadı (botu engellemiş)." if done["failed"] else "."))
         return sent
 
+    async def warn_expiring(self, now: float | None = None) -> int:
+        """Three days before timed access ends: say when, and offer to extend."""
+        now = time.time() if now is None else now
+        sent = 0
+        for order in self.store.expiring_timed_orders(now, RENEW_WINDOW):
+            self.store.mark_expiry_warned(order["id"])
+            if self.store.has_other_access(order["user"], product=order["product"], exclude=order["id"], now=now) \
+                    and (self.store.active_until(order["user"], order["product"], now, exclude=order["id"]) or 0) \
+                    > (self.store.access_until(order) or 0):
+                continue  # already extended
+            product = self.products.get(order["product"])
+            day = time.strftime("%d.%m.%Y", time.localtime(self.store.access_until(order)))
+            extra = {}
+            if product and self.settings.sales_enabled:
+                extra = {"reply_markup": {"inline_keyboard": [[{
+                    "text": f"⏳ {product.access_days or order['access_days']} gün uzat · ⭐{product.stars}",
+                    "web_app": {"url": f"{self.settings.webapp_url}/app?p={product.id}"}}]]}}
+            try:
+                await self.api("sendMessage", chat_id=order["user"],
+                               text=f"'{order['title']}' erişimin {day} tarihinde bitiyor. Şimdi uzatırsan "
+                                    "yeni süre kalan günlerinin üstüne eklenir.", **extra)
+                sent += 1
+            except Exception as exc:  # noqa: BLE001
+                log.info("Süre uyarısı gönderilemedi: %s", type(exc).__name__)
+        return sent
+
     async def remind_carts(self, now: float | None = None) -> int:
         """One gentle reminder for an order left unpaid for an hour (never twice for the same product)."""
         if not self.settings.cart_reminder or not self.settings.sales_enabled:
@@ -618,7 +657,9 @@ class StarsShop:
             log.error("Tek seferlik sipariş ikinci kez ödendi: order=%s charge=%s", order["id"], charge)
             return
         elif order["access_days"]:
-            expires = int(time.time()) + int(order["access_days"]) * 86400
+            # an extension bought in the last days continues from the current end, not from today
+            start = max(time.time(), self.store.active_until(user, order["product"], exclude=order["id"]) or 0)
+            expires = int(start) + int(order["access_days"]) * 86400
         renewal = bool(self.store.live_payments(order["id"]))
         self.store.add_payment(charge, order, expires, bool(payment.get("is_recurring")))
         if order["promo"] and not renewal:

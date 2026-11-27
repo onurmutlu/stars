@@ -631,3 +631,31 @@ def test_customers_cannot_broadcast_and_cancel_works(client, api, store):
     hook(client, text("/duyuru Merhaba", user_id=ADMIN, update_id=62))
     hook(client, text("/duyuru_iptal", user_id=ADMIN, update_id=63))
     assert store.pending_broadcast() is None and "iptal" in api.of("sendMessage")[-1]["text"]
+
+
+def test_timed_access_warns_and_extends_on_top_of_remaining_days(api, store):
+    from fastapi.testclient import TestClient
+    from app.config import Product
+    from app.main import create_app
+    from tests.conftest import make_settings
+    products = {"kamp": Product("kamp", "Kamp", "k", 90, "link", access_days=30, channel_id=-1008)}
+    with TestClient(create_app(make_settings(), products, store, api, background=False)) as client:
+        shop = client.app.state.shop
+        first = order(client, "kamp")
+        hook(client, paid(first, amount=90, charge="r1"))
+        now = time.time()
+        assert asyncio.run(shop.warn_expiring(now)) == 0          # 30 days left: nothing yet
+        old_end = now + 2 * 86400
+        store.db.execute("UPDATE payments SET expires=? WHERE charge='r1'", (old_end,)); store.db.commit()
+        assert asyncio.run(shop.warn_expiring(now)) == 1
+        warning = api.of("sendMessage")[-1]
+        assert "bitiyor" in warning["text"] and warning["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"].endswith("?p=kamp")
+        assert asyncio.run(shop.warn_expiring(now)) == 0          # once
+        second = order(client, "kamp")                             # allowed in the last three days
+        hook(client, paid(second, amount=90, charge="r2", update_id=6))
+        assert abs(store.access_until(store.order(second)) - (old_end + 30 * 86400)) < 5
+        after_old_end = old_end + 3600
+        asyncio.run(shop.sweep_channels(after_old_end))
+        assert not api.of("banChatMember")                          # still a member through the renewal
+        assert asyncio.run(shop.notify_expired(after_old_end)) == 0
+        assert client.post("/api/orders", json={"product_id": "kamp"}, headers=headers()).status_code == 409
