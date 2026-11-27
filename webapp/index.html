@@ -44,7 +44,8 @@
         <div class="detail-body">
           <div class="tags" id="detail-tags"></div>
           <h2 id="detail-title"></h2>
-          <p class="price big" id="detail-price"></p>
+          <div class="price-row"><p class="price big" id="detail-price"></p><s class="was" id="detail-was" hidden></s>
+            <button class="rating-link" id="detail-rating" type="button" hidden></button></div>
           <p class="desc" id="detail-desc"></p>
           <ul class="facts" id="detail-facts"></ul>
           <div class="promo" id="promo-box">
@@ -54,8 +55,19 @@
           <p class="promo-note" id="promo-note" hidden></p>
           <div class="detail-actions">
             <button class="btn wide" id="detail-buy"></button>
+            <button class="btn ghost wide" id="detail-gift" hidden data-i18n="gift_buy">🎁 Hediye et</button>
+            <button class="btn ghost wide" id="detail-wait" hidden data-i18n="wait_join">🔔 Gelince haber ver</button>
             <button class="btn ghost wide" id="detail-share" hidden data-i18n="share">Paylaş</button>
           </div>
+          <section class="reviews" id="reviews" hidden>
+            <h3 data-i18n="reviews_title">Yorumlar</h3>
+            <form class="review-form" id="review-form" hidden>
+              <div class="stars-pick" id="stars-pick" role="radiogroup"></div>
+              <textarea id="review-text" maxlength="500" rows="2" data-i18n-placeholder="review_placeholder"></textarea>
+              <button class="btn" id="review-send" type="submit" data-i18n="review_send">Gönder</button>
+            </form>
+            <div id="review-list" class="review-list"></div>
+          </section>
         </div>
       </article>
     </section>

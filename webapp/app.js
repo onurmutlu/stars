@@ -32,6 +32,13 @@
       left_n: "Son {n}", sold_out: "Tükendi", fact_left: "Sınırlı sayıda: {n} adet kaldı.",
       ends_in: "⏰ {when} kaldı", fact_ends: "Satış {date} tarihinde kapanır.", days_short: "{n} gün", hours_short: "{n} saat",
       invite_title: "🎁 Arkadaşını davet et", invite_text: "Linkinle gelen biri ilk alışverişini yapınca sana %{p} indirim kodu gelir.",
+      gift_buy: "🎁 Hediye et", gift_tag: "🎁 Hediye", gift_open: "Açıldı ✓", gift_wait: "Henüz açılmadı",
+      gift_share: "Hediye linkini gönder", gift_msg: "Sana bir hediyem var 🎁 {title}", gift_ready: "🎁 Hediye linkin hazır; bot sohbetine de gönderildi.",
+      gift_cancel: "İptal edildi",
+      wait_join: "🔔 Gelince haber ver", wait_ok: "Listedesin; yeniden satışa çıkınca bot sana yazacak.",
+      reviews_title: "Yorumlar", review_placeholder: "Kısaca deneyimin (isteğe bağlı)", review_send: "Gönder",
+      review_thanks: "Teşekkürler! Puanın kaydedildi.", review_pick: "Önce yıldız seç.", review_none: "Henüz yorum yok.",
+      review_count: "{n} değerlendirme", review_mine: "Puanını güncelleyebilirsin:",
       invite_share: "Davet linkini paylaş", invite_msg: "{shop} · Telegram içinde Stars ile alışveriş",
     },
     en: {
@@ -61,6 +68,13 @@
       left_n: "{n} left", sold_out: "Sold out", fact_left: "Limited: {n} left.",
       ends_in: "⏰ {when} left", fact_ends: "Sale closes on {date}.", days_short: "{n} days", hours_short: "{n} hours",
       invite_title: "🎁 Invite a friend", invite_text: "When someone from your link makes a first purchase, you get a {p}% discount code.",
+      gift_buy: "🎁 Send as a gift", gift_tag: "🎁 Gift", gift_open: "Opened ✓", gift_wait: "Not opened yet",
+      gift_share: "Send the gift link", gift_msg: "I have a gift for you 🎁 {title}", gift_ready: "🎁 Your gift link is ready; it was also sent in the bot chat.",
+      gift_cancel: "Cancelled",
+      wait_join: "🔔 Notify me", wait_ok: "You're on the list; the bot will message you when it's back.",
+      reviews_title: "Reviews", review_placeholder: "Your experience (optional)", review_send: "Send",
+      review_thanks: "Thanks! Your rating is saved.", review_pick: "Pick the stars first.", review_none: "No reviews yet.",
+      review_count: "{n} reviews", review_mine: "You can update your rating:",
       invite_share: "Share your invite link", invite_msg: "{shop} · shop with Stars inside Telegram",
     },
   };
@@ -252,8 +266,12 @@
     if (product.sold_out) card.classList.add("sold");
     const info = el("div", "info");
     info.append(el("h3", "", product.title), el("p", "", product.description));
+    if (product.reviews) info.append(el("span", "rating", `★ ${product.rating} (${product.reviews})`));
     const row = el("div", "row");
-    row.append(el("span", "price", String(product.stars)));
+    const price = el("span", "price-wrap");
+    price.append(el("span", "price", String(product.stars)));
+    if (product.compare_at) price.append(el("s", "was", String(product.compare_at)));
+    row.append(price);
     if (owned.has(product.id)) row.append(el("span", "mine", t("yours")));
     else if (product.kind === "subscription") row.append(el("span", "badge", t("per_month")));
     else if (product.access_days) row.append(el("span", "badge", t("per_days", { n: product.access_days })));
@@ -283,6 +301,10 @@
     $("detail-tags").replaceChildren(...tags);
     $("detail-title").textContent = product.title;
     $("detail-price").textContent = String(product.stars);
+    $("detail-was").textContent = product.compare_at ? `⭐${product.compare_at}` : "";
+    $("detail-was").hidden = !product.compare_at;
+    $("detail-rating").hidden = !product.reviews;
+    $("detail-rating").textContent = product.reviews ? `★ ${product.rating} · ${t("review_count", { n: product.reviews })}` : "";
     $("detail-desc").textContent = product.description;
     const facts = [["⚡", t("fact_instant")], product.kind === "subscription" ? ["🔁", t("fact_sub")]
       : product.access_days ? ["⏳", t("fact_days", { n: product.access_days })] : ["📦", t("fact_once")]];
@@ -311,10 +333,72 @@
     $("detail-buy").disabled = soldOut;
     if (soldOut) $("promo-box").hidden = true;
     $("detail-share").hidden = !config.bot_username;
+    $("detail-gift").hidden = soldOut || product.kind === "subscription";
+    $("detail-wait").hidden = !soldOut;
+    $("detail-wait").disabled = false;
+    loadReviews(product);
     returnTo = view === "detail" ? returnTo : (view === "library" ? "library" : "shop");
     show("detail");
     soldOut ? hideMainButton() : showMainButton(label);
     if (promoCode && !isOwned && !soldOut && product.kind !== "subscription") applyPromo(true);
+  }
+
+  // ---------------------------------------------------------------- reviews
+  let reviewRating = 0;
+  function drawStars() {
+    $("stars-pick").replaceChildren(...[1, 2, 3, 4, 5].map((n) => {
+      const star = el("button", n <= reviewRating ? "star on" : "star", "★");
+      star.type = "button";
+      star.setAttribute("aria-label", String(n));
+      star.addEventListener("click", () => { reviewRating = n; haptic("select"); drawStars(); });
+      return star;
+    }));
+  }
+  async function loadReviews(product) {
+    $("reviews").hidden = true;
+    let data;
+    try { data = await api(`/api/reviews?product_id=${encodeURIComponent(product.id)}`); } catch (_) { return; }
+    if (!current || current.id !== product.id) return;
+    $("reviews").hidden = !data.count && !data.can_review;
+    $("review-form").hidden = !data.can_review;
+    reviewRating = data.mine ? data.mine.rating : 0;
+    $("review-text").value = data.mine && data.mine.text ? data.mine.text : "";
+    drawStars();
+    $("review-list").replaceChildren(...(data.items.length ? data.items.map((r) => {
+      const item = el("div", "review");
+      const head = el("div", "review-head");
+      head.append(el("span", "review-stars", "★".repeat(r.rating) + "☆".repeat(5 - r.rating)), el("b", "", r.name),
+        el("span", "muted", formatDate(r.created)));
+      item.append(head);
+      if (r.text) item.append(el("p", "", r.text));
+      return item;
+    }) : [el("p", "muted", t("review_none"))]));
+    if (wantReview && data.can_review) {
+      wantReview = false;
+      $("reviews").scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }
+  async function sendReview(event) {
+    event.preventDefault();
+    if (!reviewRating) { toast(t("review_pick")); return; }
+    try {
+      await api("/api/reviews", { method: "POST", body: JSON.stringify({
+        product_id: current.id, rating: reviewRating, text: $("review-text").value.trim() || null }) });
+      haptic("light");
+      toast(t("review_thanks"));
+      loadReviews(current);
+    } catch (error) { toast(error.message); }
+  }
+  async function joinWaitlist() {
+    try {
+      await api("/api/waitlist", { method: "POST", body: JSON.stringify({ product_id: current.id }) });
+      $("detail-wait").disabled = true;
+      toast(t("wait_ok"));
+    } catch (error) { toast(error.message); }
+  }
+  function shareGift(item) {
+    const text = t("gift_msg", { title: item.title });
+    openLink(`https://t.me/share/url?url=${encodeURIComponent(item.gift.link)}&text=${encodeURIComponent(text)}`);
   }
 
   // Discount code: ask the server for the price, show it, and buy with it.
@@ -345,7 +429,9 @@
     if (!current) return;
     const price = $("detail-price");
     price.textContent = String(quote ? quote.stars : current.stars);
-    if (quote && quote.stars !== quote.original) price.append(el("span", "old-price", `⭐${quote.original}`));
+    const discounted = quote && quote.stars !== quote.original;
+    if (discounted) price.append(el("span", "old-price", `⭐${quote.original}`));
+    $("detail-was").hidden = discounted || !current.compare_at;  // one struck price is enough
     if (!owned.has(current.id)) {
       const label = t("buy_for", { n: quote ? quote.stars : current.stars });
       $("detail-buy").textContent = label;
@@ -428,7 +514,15 @@
     const card = el("article", "card");
     card.append(el("h3", "", item.title));
     const row = el("div", "row");
-    if (item.status === "paid") {
+    if (item.status === "gift") {
+      row.append(el("span", "badge", t("gift_tag")),
+        el("span", item.gift.claimed ? "badge ok" : "badge off", item.gift.refunded ? t("gift_cancel") : item.gift.claimed ? t("gift_open") : t("gift_wait")));
+      if (item.gift.link && !item.gift.claimed) {
+        const send = el("button", "btn small", t("gift_share"));
+        send.addEventListener("click", () => shareGift(item));
+        row.append(send);
+      }
+    } else if (item.status === "paid") {
       row.append(el("span", "badge ok", item.access_until ? `${t("until")} ${formatDate(item.access_until)}` : t("owned")));
       const open = el("button", "btn", t("open"));
       open.addEventListener("click", () => { returnTo = "library"; openContent(item); });
@@ -457,13 +551,13 @@
   }
 
   // ---------------------------------------------------------------- purchase
-  async function buy(product) {
+  async function buy(product, gift = false) {
     if (!tg) return;
     busy(true);
     haptic("medium");
     try {
       const { order_id: orderId, invoice_link: link } = await api("/api/orders", {
-        method: "POST", body: JSON.stringify({ product_id: product.id, code: quote ? quote.code : null }),
+        method: "POST", body: JSON.stringify({ product_id: product.id, code: quote ? quote.code : null, gift }),
       });
       tg.openInvoice(link, async (status) => {
         busy(false);
@@ -489,6 +583,11 @@
     for (let attempt = 0; attempt < 10; attempt += 1) {
       try {
         const order = await api(`/api/orders/${encodeURIComponent(orderId)}`);
+        if (order.status === "gift") {
+          toast(t("gift_ready"));
+          await showLibrary();
+          return;
+        }
         if (order.status === "paid") {
           toast(t("paid"));
           owned.add(order.product);
@@ -514,10 +613,13 @@
     const params = new URLSearchParams(location.search);
     const start = tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param;
     promoCode = (params.get("code") || (start && start.startsWith("kod_") ? start.slice(4) : "") || "").toUpperCase();
+    wantReview = params.get("review") === "1";
     const fromQuery = params.get("p");
     const id = fromQuery || (start && start.startsWith("p_") ? start.slice(2) : "");
     return id ? products.find((p) => p.id === id) : null;
   }
+
+  let wantReview = false;
 
   async function boot() {
     document.querySelectorAll("[data-i18n]").forEach((node) => { node.textContent = t(node.dataset.i18n); });
@@ -534,6 +636,10 @@
     tg.MainButton.onClick(detailAction);
     $("detail-buy").addEventListener("click", detailAction);
     $("detail-share").addEventListener("click", share);
+    $("detail-gift").addEventListener("click", () => { if (current) buy(current, true); });
+    $("detail-wait").addEventListener("click", joinWaitlist);
+    $("detail-rating").addEventListener("click", () => $("reviews").scrollIntoView({ behavior: "smooth" }));
+    $("review-form").addEventListener("submit", sendReview);
     $("promo-apply").addEventListener("click", () => applyPromo(false));
     $("promo-code").addEventListener("keydown", (event) => { if (event.key === "Enter") applyPromo(false); });
     document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {

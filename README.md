@@ -121,7 +121,7 @@ python -m app.cli issues                 # iade ya da elle teslimat bekleyen öd
 python -m app.cli refund CHARGE_ID       # onay sorar; --yes ile sormaz
 ```
 
-Bot içinden admin (`ADMIN_IDS`): `/admin`, `/musteriler`, `/kod`, `/duyuru`, `/dosya`, `/rapor`, `/issues`, `/refund CHARGE_ID`.
+Bot içinden admin (`ADMIN_IDS`): `/admin`, `/musteriler`, `/kod`, `/duyuru`, `/dosya`, `/rapor`, `/kaynaklar`, `/yorumlar`, `/issues`, `/refund CHARGE_ID`.
 Alıcı: `/orders`, `/davet`, `/durdur`, `/baslat`, `/paysupport`, `/terms`.
 
 **Dosya teslimi:** Dosyayı (PDF, video, zip, ses, foto) bota gönder, açıklamasına `/dosya <ürün-kimliği>` yaz. Ödemeden
@@ -140,6 +140,23 @@ Mini App "ayrı ayrı ⭐N, paketle ⭐M kazanırsın" gösterir. Paket iade edi
 **Davet programı:** `REFERRAL_PERCENT=15` (Hub'da mağaza ayarı). Alıcı `/davet` ya da Mini App'teki "Arkadaşını davet et"
 ile `t.me/<bot>?start=ref_<id>` linkini paylaşır. Gelen kişinin ilk ücretli alışverişinde davet edene %15'lik, tek
 kullanımlık, 30 gün geçerli bir kod gider. Kişi başına bir ödül; kendi kendini davet işe yaramaz.
+
+**Hediye:** Ürün sayfasındaki "🎁 Hediye et" ile alıcı tek seferlik bir ürünü başkası için öder. Bot ona
+`t.me/<bot>?start=gift_XXXX` linkini ve "Hediyeyi gönder" düğmesini yollar. Linki ilk açan kişi ürünü alır (süreli üründe süre
+açıldığı an başlar), hediye eden "Hediyen açıldı" mesajı alır. Hediye iade edilirse alan kişiden de geri alınır. Stok bir adet düşer.
+
+**Satış sonrası öneri:** Ürüne `upsell: "ileri"` ve `upsell_percent: 30` ver: ödemeden hemen sonra alıcıya o ürün önerilir,
+yüzde verdiysen 48 saat geçerli, tek kullanımlık, sadece o ürüne geçen bir kodla. `compare_at: 250` üstü çizili eski fiyat gösterir.
+
+**Yorumlar:** Sadece satın alan puan (1–5) ve yorum bırakabilir; kişi başına bir yorum, sonradan güncellenir. Satın almadan bir gün
+sonra bot bir kez "nasıldı?" diye sorar (`REVIEW_REQUEST=false` kapatır). Kartlarda ★ ortalama görünür. `/yorumlar` son yorumları
+listeler, `/yorumlar gizle <ürün> <kullanıcı>` gizler; Hub panelinde de gizle/göster var.
+
+**Bekleme listesi:** Tükenen üründe "🔔 Gelince haber ver" çıkar. Stok artırılınca ya da iade ile adet boşalınca bekleyen herkese
+bot yazar. Hub panelinde ürünün yanında "🔔 N bekliyor" görünür.
+
+**Kaynaklar:** `/kaynaklar` (ve panelde "Kaynaklar") ilk geliş kaynağına göre kişi, alıcı, ⭐ ve dönüşüm oranını verir.
+Davet, kampanya kodu, ürün ve hediye linkleri kendi başlıklarında toplanır.
 
 **CSV rapor:** `/rapor` (ya da Hub panelinde "CSV raporu bota gönder") satislar.csv ve musteriler.csv dosyalarını bot
 sohbetine gönderir; Excel Türkçe karakterleri doğru açar (UTF-8 BOM, `;` ayraç).

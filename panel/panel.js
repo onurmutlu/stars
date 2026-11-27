@@ -178,6 +178,42 @@
     loadCustomers().catch((error) => toast(error.message));
     loadPromos().catch(() => {});
     loadBroadcast().catch(() => {});
+    loadSources().catch(() => {});
+    loadReviews().catch(() => {});
+  }
+
+  // ---------------------------------------------------------------- sources and reviews
+  async function loadSources() {
+    const rows = await api(`/panel/api/shops/${shop.id}/sources`);
+    $("sources").replaceChildren(...(rows.length ? rows.map((r) => {
+      const card = el("article", "card pay-item");
+      const row = el("div", "row");
+      row.append(el("h3", "", r.source), el("span", "badge", `⭐${r.stars}`));
+      const foot = el("div", "row");
+      foot.append(el("span", "meta", `${r.people} kişi · ${r.buyers} alıcı · %${r.conversion} dönüşüm`));
+      card.append(row, foot);
+      return card;
+    }) : [el("div", "empty", "Henüz ziyaret yok.")]));
+  }
+
+  async function loadReviews() {
+    const rows = await api(`/panel/api/shops/${shop.id}/reviews`);
+    $("review-count").textContent = rows.length ? String(rows.length) : "";
+    $("reviews").replaceChildren(...(rows.length ? rows.map((r) => {
+      const card = el("article", "card pay-item");
+      const row = el("div", "row");
+      row.append(el("h3", "", `${"★".repeat(r.rating)} ${r.product}`), el("span", r.hidden ? "badge off" : "badge", r.hidden ? "gizli" : "yayında"));
+      const foot = el("div", "row");
+      foot.append(el("span", "meta", `${r.name || r.user}${r.text ? ": " + r.text : ""}`));
+      const toggle = el("button", "btn small ghost", r.hidden ? "Göster" : "Gizle");
+      toggle.addEventListener("click", () => guarded(toggle, async () => {
+        await api(`/panel/api/shops/${shop.id}/reviews/${encodeURIComponent(r.product)}/${r.user}`, json("PUT", { hidden: !r.hidden }));
+        await loadReviews();
+      }));
+      foot.append(toggle);
+      card.append(row, foot);
+      return card;
+    }) : [el("div", "empty", "Henüz yorum yok. Alıcılara satın aldıktan bir gün sonra puan isteği gider.")]));
   }
 
   // ---------------------------------------------------------------- discount codes
@@ -386,7 +422,8 @@
     const kindText = p.kind === "subscription" ? "Aylık abonelik" : (p.access_days ? `${p.access_days} gün erişim` : "Tek seferlik");
     foot.append(el("span", p.over_limit ? "badge off" : "badge",
       p.over_limit ? "Plan sınırı dışında, satılmıyor" : kindText + (p.file ? " · 📎" : "") + (p.channel_id ? " · 📣" : "") +
-      (p.includes ? " · 🧺 paket" : "") + (p.stock ? ` · stok ${p.stock}` : "") + (p.sale_until ? " · ⏰" : "")));
+      (p.reviews ? ` · ★${p.rating} (${p.reviews})` : "") + (p.waiting ? ` · 🔔 ${p.waiting} bekliyor` : "") +
+      (p.upsell ? " · ✨ öneri" : "") + (p.includes ? " · 🧺 paket" : "") + (p.stock ? ` · stok ${p.stock}` : "") + (p.sale_until ? " · ⏰" : "")));
     const actions = el("div", "actions");
     const edit = el("button", "btn small ghost", "Düzenle");
     edit.addEventListener("click", () => openProduct(p));
@@ -486,6 +523,16 @@
     $("p-channel").value = p && p.channel_id ? String(p.channel_id) : "";
     $("p-days").value = p && p.access_days ? String(p.access_days) : "";
     $("p-includes").value = p && p.includes ? p.includes : "";
+    $("p-compare").value = p && p.compare_at ? String(p.compare_at) : "";
+    $("p-upsell-percent").value = p && p.upsell_percent ? String(p.upsell_percent) : "";
+    const none = el("option", "", "— yok —");
+    none.value = "";
+    $("p-upsell").replaceChildren(none, ...shop.products.filter((x) => !p || x.id !== p.id).map((x) => {
+      const option = el("option", "", `${x.title} · ⭐${x.stars}`);
+      option.value = x.id;
+      return option;
+    }));
+    $("p-upsell").value = p && p.upsell ? p.upsell : "";
     $("p-stock").value = p && p.stock ? String(p.stock) : "";
     $("p-until").value = localInput(p && p.sale_until);
     $("p-file-id").textContent = p ? p.id : "ürün-kimliği";
@@ -515,6 +562,9 @@
       access_days: $("p-kind").value === "subscription" ? null : ($("p-days").value.trim() || null),
       includes: $("p-kind").value === "subscription" ? null : ($("p-includes").value.trim() || null),
       stock: $("p-stock").value.trim() || null,
+      compare_at: $("p-compare").value.trim() || null,
+      upsell: $("p-upsell").value || null,
+      upsell_percent: $("p-upsell").value ? ($("p-upsell-percent").value.trim() || null) : null,
       sale_until: $("p-until").value ? $("p-until").value.replace("T", " ") : null,
     };
     const path = `/panel/api/shops/${shop.id}/products` + (editing ? `/${encodeURIComponent(editing)}` : "");
